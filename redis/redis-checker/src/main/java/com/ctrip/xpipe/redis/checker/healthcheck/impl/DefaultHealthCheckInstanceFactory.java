@@ -10,16 +10,16 @@ import com.ctrip.xpipe.redis.checker.DcRelationsService;
 import com.ctrip.xpipe.redis.checker.cluster.GroupCheckerLeaderElector;
 import com.ctrip.xpipe.redis.checker.config.CheckerConfig;
 import com.ctrip.xpipe.redis.checker.healthcheck.*;
+import com.ctrip.xpipe.redis.checker.healthcheck.actions.ping.PingActionFactory;
+import com.ctrip.xpipe.redis.checker.healthcheck.actions.psubscribe.PsubActionFactory;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.redisconf.RedisCheckRule;
 import com.ctrip.xpipe.redis.checker.healthcheck.config.CompositeHealthCheckConfig;
 import com.ctrip.xpipe.redis.checker.healthcheck.config.DefaultHealthCheckConfig;
 import com.ctrip.xpipe.redis.checker.healthcheck.config.HealthCheckConfig;
 import com.ctrip.xpipe.redis.checker.healthcheck.leader.SiteLeaderAwareHealthCheckActionFactory;
-import com.ctrip.xpipe.redis.checker.healthcheck.session.KeeperSessionManager;
 import com.ctrip.xpipe.redis.checker.healthcheck.session.RedisSessionManager;
 import com.ctrip.xpipe.redis.checker.healthcheck.util.ClusterTypeSupporterSeparator;
 import com.ctrip.xpipe.redis.core.entity.ClusterMeta;
-import com.ctrip.xpipe.redis.core.entity.KeeperMeta;
 import com.ctrip.xpipe.redis.core.entity.RedisCheckRuleMeta;
 import com.ctrip.xpipe.redis.core.entity.RedisMeta;
 import com.ctrip.xpipe.redis.core.meta.MetaCache;
@@ -53,10 +53,6 @@ public class DefaultHealthCheckInstanceFactory implements HealthCheckInstanceFac
 
     private RedisSessionManager redisSessionManager;
 
-    private KeeperSessionManager keeperSessionManager;
-
-    private List<KeeperHealthCheckActionFactory<?>> keeperHealthCheckActionFactories;
-
     private Map<ClusterType, List<RedisHealthCheckActionFactory<?>>> factoriesByClusterType;
 
     private Map<ClusterType, List<ClusterHealthCheckActionFactory<?>>> clusterHealthCheckFactoriesByClusterType;
@@ -70,43 +66,31 @@ public class DefaultHealthCheckInstanceFactory implements HealthCheckInstanceFac
 
     @Autowired(required = false)
     public DefaultHealthCheckInstanceFactory(CheckerConfig checkerConfig, HealthCheckEndpointFactory endpointFactory,
-                                             RedisSessionManager redisSessionManager, KeeperSessionManager keeperSessionManager,
+                                             RedisSessionManager redisSessionManager,
                                              List<RedisHealthCheckActionFactory<?>> factories,
-                                             List<KeeperHealthCheckActionFactory<?>> keeperHealthCheckActionFactories,
                                              List<ClusterHealthCheckActionFactory<?>> clusterHealthCheckFactories,
                                              GroupCheckerLeaderElector clusterServer, MetaCache metaCache, DcRelationsService dcRelationsService) {
         this.checkerConfig = checkerConfig;
         this.dcRelationsService = dcRelationsService;
         this.endpointFactory = endpointFactory;
         this.redisSessionManager = redisSessionManager;
-        this.keeperSessionManager = keeperSessionManager;
         this.clusterServer = clusterServer;
         this.metaCache = metaCache;
         this.factoriesByClusterType = ClusterTypeSupporterSeparator.divideByClusterType(factories);
         this.clusterHealthCheckFactoriesByClusterType = ClusterTypeSupporterSeparator.divideByClusterType(clusterHealthCheckFactories);
-        this.keeperHealthCheckActionFactories = keeperHealthCheckActionFactories;
     }
 
     @Autowired(required = false)
     public DefaultHealthCheckInstanceFactory(CheckerConfig checkerConfig, HealthCheckEndpointFactory endpointFactory,
-                                             RedisSessionManager redisSessionManager,  KeeperSessionManager keeperSessionManager,
+                                             RedisSessionManager redisSessionManager,
                                              List<RedisHealthCheckActionFactory<?>> factories,
-                                             List<KeeperHealthCheckActionFactory<?>> keeperHealthCheckActionFactories,
                                              List<ClusterHealthCheckActionFactory<?>> clusterHealthCheckFactories,
                                              MetaCache metaCache, DcRelationsService dcRelationsService) {
-        this(checkerConfig, endpointFactory, redisSessionManager, keeperSessionManager, factories,
-                keeperHealthCheckActionFactories, clusterHealthCheckFactories, null, metaCache, dcRelationsService);
+        this(checkerConfig, endpointFactory, redisSessionManager, factories, clusterHealthCheckFactories, null, metaCache, dcRelationsService);
     }
 
     @Override
     public void remove(RedisHealthCheckInstance instance) {
-        Endpoint endpoint = instance.getEndpoint();
-        endpointFactory.remove(new HostPort(endpoint.getHost(), endpoint.getPort()));
-        stopCheck(instance);
-    }
-
-    @Override
-    public void remove(KeeperHealthCheckInstance instance) {
         Endpoint endpoint = instance.getEndpoint();
         endpointFactory.remove(new HostPort(endpoint.getHost(), endpoint.getPort()));
         stopCheck(instance);
@@ -124,7 +108,7 @@ public class DefaultHealthCheckInstanceFactory implements HealthCheckInstanceFac
 
         RedisInstanceInfo info = createRedisInstanceInfo(redisMeta);
         Endpoint endpoint = endpointFactory.getOrCreateEndpoint(redisMeta);
-        HealthCheckConfig config = new CompositeHealthCheckConfig(info, checkerConfig, dcRelationsService);
+        HealthCheckConfig config = new CompositeHealthCheckConfig(info, checkerConfig, dcRelationsService, metaCache.isCrossRegion(currentDcId, info.getDcId()));
 
         instance.setEndpoint(endpoint)
                 .setSession(redisSessionManager.findOrCreateSession(endpoint))
@@ -188,47 +172,11 @@ public class DefaultHealthCheckInstanceFactory implements HealthCheckInstanceFac
     }
 
     @Override
-    public KeeperHealthCheckInstance create(KeeperMeta keeperMeta) {
-        DefaultKeeperHealthCheckInstance instance = new DefaultKeeperHealthCheckInstance();
-
-        KeeperInstanceInfo keeper = createKeeperInstanceInfo(keeperMeta);
-        HealthCheckConfig config = new CompositeHealthCheckConfig(keeper, checkerConfig, dcRelationsService);
-        Endpoint endpoint = endpointFactory.getOrCreateEndpoint(keeperMeta);
-        instance.setEndpoint(endpoint)
-                .setSession(keeperSessionManager.findOrCreateSession(endpoint))
-                .setInstanceInfo(keeper)
-                .setHealthCheckConfig(config);
-        initKeeperActions(instance);
-        startCheck(instance);
-        return instance;
-    }
-
-    private KeeperInstanceInfo createKeeperInstanceInfo(KeeperMeta keeperMeta) {
-        ClusterType clusterType = ClusterType.lookup(((ClusterMeta)keeperMeta.parent().parent()).getType());
-
-        DefaultKeeperInstanceInfo info = new DefaultKeeperInstanceInfo(
-                ((ClusterMeta)keeperMeta.parent().parent()).parent().getId(),
-                ((ClusterMeta)keeperMeta.parent().parent()).getId(),
-                keeperMeta.parent().getId(),
-                new HostPort(keeperMeta.getIp(), keeperMeta.getPort()),
-                keeperMeta.parent().getActiveDc(), clusterType);
-        info.setActive(keeperMeta.isActive());
-
-        return info;
-    }
-
-    private void initKeeperActions(DefaultKeeperHealthCheckInstance instance) {
-        keeperHealthCheckActionFactories.forEach(keeperHealthCheckActionFactory -> {
-            initActions(instance, keeperHealthCheckActionFactory);
-        });
-    }
-
-    @Override
-    public RedisHealthCheckInstance createRedisInstanceForAssignedAction(RedisMeta redis) {
+    public RedisHealthCheckInstance getOrCreateRedisInstanceForPsubPingAction(RedisMeta redis) {
         DefaultRedisHealthCheckInstance instance = new DefaultRedisHealthCheckInstance();
 
         RedisInstanceInfo info = createRedisInstanceInfo(redis);
-        HealthCheckConfig config = new CompositeHealthCheckConfig(info, checkerConfig, dcRelationsService);
+        HealthCheckConfig config = new CompositeHealthCheckConfig(info, checkerConfig, dcRelationsService, metaCache.isCrossRegion(currentDcId, info.getDcId()));
         Endpoint endpoint = endpointFactory.getOrCreateEndpoint(redis);
 
         instance.setEndpoint(endpoint)
@@ -236,22 +184,26 @@ public class DefaultHealthCheckInstanceFactory implements HealthCheckInstanceFac
                 .setInstanceInfo(info)
                 .setHealthCheckConfig(config);
 
-        initActionsForRedisForAssignedAction(instance);
+        initActionsForRedisForPsubPingAction(instance);
         startCheck(instance);
 
         return instance;
     }
 
-    private void initActionsForRedisForAssignedAction(DefaultRedisHealthCheckInstance instance) {
-        for(RedisHealthCheckActionFactory<?> factory : factoriesByClusterType.get(instance.getCheckInfo().getClusterType())) {
-            if (factory instanceof KeeperSupport)
+    private void initActionsForRedisForPsubPingAction(DefaultRedisHealthCheckInstance instance) {
+        List<RedisHealthCheckActionFactory<?>> redisHealthCheckActionFactories = factoriesByClusterType.get(instance.getCheckInfo().getClusterType());
+        if (redisHealthCheckActionFactories == null) return;
+        for(RedisHealthCheckActionFactory<?> factory : redisHealthCheckActionFactories) {
+            if (factory instanceof PingActionFactory || factory instanceof PsubActionFactory)
                 initActions(instance, factory);
         }
     }
 
     @SuppressWarnings("unchecked")
     private void initActions(DefaultRedisHealthCheckInstance instance) {
-        for(RedisHealthCheckActionFactory<?> factory : factoriesByClusterType.get(instance.getCheckInfo().getClusterType())) {
+        List<RedisHealthCheckActionFactory<?>> redisHealthCheckActionFactories = factoriesByClusterType.get(instance.getCheckInfo().getClusterType());
+        if (redisHealthCheckActionFactories == null) return;
+        for(RedisHealthCheckActionFactory<?> factory : redisHealthCheckActionFactories) {
             initActions(instance, factory);
         }
     }
@@ -285,7 +237,9 @@ public class DefaultHealthCheckInstanceFactory implements HealthCheckInstanceFac
     }
 
     private void initActions(DefaultClusterHealthCheckInstance instance) {
-        for(ClusterHealthCheckActionFactory<?> factory : clusterHealthCheckFactoriesByClusterType.get(instance.getCheckInfo().getClusterType())) {
+        List<ClusterHealthCheckActionFactory<?>> clusterHealthCheckActionFactories = clusterHealthCheckFactoriesByClusterType.get(instance.getCheckInfo().getClusterType());
+        if (clusterHealthCheckActionFactories == null) return;
+        for(ClusterHealthCheckActionFactory<?> factory : clusterHealthCheckActionFactories) {
             if (factory instanceof SiteLeaderAwareHealthCheckActionFactory) {
                 installActionIfNeeded((SiteLeaderAwareHealthCheckActionFactory) factory, instance);
             } else {

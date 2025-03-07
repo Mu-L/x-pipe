@@ -3,12 +3,10 @@ package com.ctrip.xpipe.redis.checker;
 import com.ctrip.xpipe.api.email.EmailResponse;
 import com.ctrip.xpipe.api.migration.OuterClientService;
 import com.ctrip.xpipe.api.server.Server;
+import com.ctrip.xpipe.endpoint.HostPort;
 import com.ctrip.xpipe.redis.checker.alert.AlertMessageEntity;
 import com.ctrip.xpipe.redis.checker.healthcheck.RedisHealthCheckInstance;
-import com.ctrip.xpipe.redis.checker.model.CheckerStatus;
-import com.ctrip.xpipe.redis.checker.model.HealthCheckResult;
-import com.ctrip.xpipe.redis.checker.model.KeeperContainerUsedInfoModel;
-import com.ctrip.xpipe.redis.checker.model.ProxyTunnelInfo;
+import com.ctrip.xpipe.redis.checker.model.*;
 import com.ctrip.xpipe.redis.core.entity.SentinelMeta;
 import com.ctrip.xpipe.redis.core.entity.XpipeMeta;
 import com.fasterxml.jackson.annotation.JsonIgnore;
@@ -27,15 +25,13 @@ public interface CheckerConsoleService {
 
     XpipeMeta getXpipeAllMeta(String console) throws SAXException, IOException;
 
-    XpipeMeta getXpipeDcAllMeta(String console, String dcName) throws SAXException, IOException;
-    
     List<ProxyTunnelInfo> getProxyTunnelInfos(String console);
 
     void ack(String console, CheckerStatus checkerStatus);
 
     void report(String console, HealthCheckResult result);
 
-    void reportKeeperContainerInfo(String console, List<KeeperContainerUsedInfoModel> keeperContainerUsedInfoModels, int index);
+    void reportKeeperContainerInfo(String console, Map<HostPort, RedisMsg> redisMsgMap, int index);
     
     boolean isClusterOnMigration(String console, String clusterId);
 
@@ -55,7 +51,9 @@ public interface CheckerConsoleService {
     
     Map<String, Date> loadAllClusterCreateTime(String console);
 
-    Map<String, OuterClientService.ClusterInfo> loadAllActiveDcOneWayClusterInfo(String console, String activeDc);
+    Map<String, OuterClientService.ClusterInfo> loadAllDcOneWayClusterInfo(String console, String dc);
+
+    Map<String, OuterClientService.ClusterInfo> loadCurrentDcOneWayClusterInfo(String console, String dc);
 
     void bindShardSentinel(String console, String dc, String cluster, String shard, SentinelMeta sentinelMeta);
 
@@ -108,4 +106,5 @@ public interface CheckerConsoleService {
     }
     
     void recordAlert(String console, String eventOperator, AlertMessageEntity message, EmailResponse response);
+
 }

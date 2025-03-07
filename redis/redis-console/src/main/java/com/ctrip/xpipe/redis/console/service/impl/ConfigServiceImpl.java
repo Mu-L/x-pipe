@@ -1,8 +1,9 @@
 package com.ctrip.xpipe.redis.console.service.impl;
 
-import com.ctrip.framework.foundation.Foundation;
 import com.ctrip.xpipe.api.foundation.FoundationService;
 import com.ctrip.xpipe.api.monitor.EventMonitor;
+import com.ctrip.xpipe.redis.checker.spring.ConsoleDisableDbCondition;
+import com.ctrip.xpipe.redis.checker.spring.DisableDbMode;
 import com.ctrip.xpipe.redis.console.config.ConsoleConfig;
 import com.ctrip.xpipe.redis.console.dao.ConfigDao;
 import com.ctrip.xpipe.redis.console.election.CrossDcLeaderElectionAction;
@@ -20,11 +21,11 @@ import com.ctrip.xpipe.utils.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Service;
 import org.unidal.dal.jdbc.DalException;
 
 import java.util.*;
-import java.util.stream.Stream;
 
 
 /**
@@ -33,10 +34,15 @@ import java.util.stream.Stream;
  * Nov 27, 2017
  */
 @Service
+@Conditional(ConsoleDisableDbCondition.class)
+@DisableDbMode(false)
 public class ConfigServiceImpl implements ConfigService {
 
     @Autowired
     private ConfigDao configDao;
+
+    @Autowired
+    private ConsoleConfig consoleConfig;
 
     @Autowired
     private AlertSystemOffChecker alertSystemOffChecker;
@@ -63,23 +69,33 @@ public class ConfigServiceImpl implements ConfigService {
         if (!KEY_KEEPER_CONTAINER_STANDARD.equals(config.getKey())) {
             throw new RuntimeException(String.format("key should be %s !", KEY_KEEPER_CONTAINER_STANDARD));
         }
-        boolean isPeerDataContained = Arrays.stream(KeeperContainerDiskType.values())
-                .map(KeeperContainerDiskType::getPeerData)
-                .anyMatch(config.getSubKey()::equalsIgnoreCase);
-        boolean isInputFlowContained = Arrays.stream(KeeperContainerDiskType.values())
-                .map(KeeperContainerDiskType::getInputFlow)
-                .anyMatch(config.getSubKey()::equalsIgnoreCase);
-        if (!isPeerDataContained && !isInputFlowContained) {
-            throw new RuntimeException(String.format("sub key should in %s", Arrays.toString(Arrays.stream(KeeperContainerDiskType.values())
-                    .map(KeeperContainerDiskType::getInputFlow).toArray())) + "," + Arrays.toString(Arrays.stream(KeeperContainerDiskType.values())
-                    .map(KeeperContainerDiskType::getPeerData).toArray()));
+        try {
+            Long.parseLong(config.getVal());
+        } catch (NumberFormatException e) {
+            throw new RuntimeException(String.format("value %s should be number ", config.getVal()));
+        }
+        setConfig(config);
+    }
+
+    @Override
+    public void setKeyKeeperContainerIoRate(ConfigModel config) throws Exception {
+        if (!KEY_KEEPER_CONTAINER_IO_RATE.equals(config.getKey())) {
+            throw new RuntimeException(String.format("key should be %s !", KEY_KEEPER_CONTAINER_IO_RATE));
+        }
+        List<ConfigModel> standardConfigs = getConfigs(KEY_KEEPER_CONTAINER_STANDARD);
+        List<String> diskTypes = new ArrayList<>();
+        standardConfigs.forEach(configModel -> {
+            diskTypes.add(configModel.getSubKey().split(KeeperContainerDiskType.DEFAULT.interval)[0]);
+        });
+        if (!diskTypes.contains(config.getSubKey())) {
+            throw new RuntimeException(String.format("subkey:%s should be in diskTypes %s !", config.getSubKey(), diskTypes));
         }
         try {
             Long.parseLong(config.getVal());
         } catch (NumberFormatException e) {
             throw new RuntimeException(String.format("value %s should be number ", config.getVal()));
         }
-        configDao.setConfig(config);
+        setConfig(config);
     }
 
     @Override
@@ -87,7 +103,7 @@ public class ConfigServiceImpl implements ConfigService {
 
         logger.info("[startAlertSystem] start alert system, config: {}", config);
         config.setKey(KEY_ALERT_SYSTEM_ON).setVal(String.valueOf(true));
-        configDao.setConfig(config);
+        setConfig(config);
     }
 
     @Override
@@ -100,7 +116,7 @@ public class ConfigServiceImpl implements ConfigService {
         config.setKey(KEY_ALERT_SYSTEM_ON).setVal(String.valueOf(false));
         logger.info("[stopAlertSystem] stop alert system, config: {}", config);
 
-        configDao.setConfigAndUntil(config, date);
+        setConfigAndUntil(config, date);
         if(previousStateOn) {
             logger.info("[stopAlertSystem] Alert System was On, alert this operation");
             alertSystemOffChecker.startAlert();
@@ -112,7 +128,7 @@ public class ConfigServiceImpl implements ConfigService {
 
         logger.info("[startSentinelAutoProcess] start sentinel auto process, config: {}", config);
         config.setKey(KEY_SENTINEL_AUTO_PROCESS).setVal(String.valueOf(true));
-        configDao.setConfig(config);
+        setConfig(config);
     }
 
     @Override
@@ -123,7 +139,7 @@ public class ConfigServiceImpl implements ConfigService {
         boolean previousStateOn = isSentinelAutoProcess();
 
         config.setKey(KEY_SENTINEL_AUTO_PROCESS).setVal(String.valueOf(false));
-        configDao.setConfigAndUntil(config, date);
+        setConfigAndUntil(config, date);
         if(previousStateOn) {
             sentinelAutoProcessChecker.startAlert();
         }
@@ -133,11 +149,10 @@ public class ConfigServiceImpl implements ConfigService {
     @Override
     public void startClusterAlert(ConfigModel config) throws DalException {
         logger.info("[startClusterAlert][{}]", config.getSubKey());
-
         config.setKey(KEY_CLUSTER_ALERT_EXCLUDE)
                 .setVal(String.valueOf(false));
         logChangeEvent(config, null);
-        configDao.setConfig(config);
+        setConfig(config);
     }
 
     @Override
@@ -148,7 +163,7 @@ public class ConfigServiceImpl implements ConfigService {
         config.setKey(KEY_CLUSTER_ALERT_EXCLUDE)
                 .setVal(String.valueOf(true));
         logChangeEvent(config, date);
-        configDao.setConfigAndUntil(config, date);
+        setConfigAndUntil(config, date);
     }
 
     @Override
@@ -158,7 +173,7 @@ public class ConfigServiceImpl implements ConfigService {
         config.setKey(KEY_SENTINEL_CHECK_EXCLUDE)
                 .setVal(String.valueOf(false));
         logChangeEvent(config, null);
-        configDao.setConfig(config);
+        setConfig(config);
     }
 
     @Override
@@ -170,7 +185,7 @@ public class ConfigServiceImpl implements ConfigService {
         config.setKey(KEY_SENTINEL_CHECK_EXCLUDE)
                 .setVal(String.valueOf(true));
         logChangeEvent(config, date);
-        configDao.setConfigAndUntil(config, date);
+        setConfigAndUntil(config, date);
     }
 
     @Override
@@ -191,11 +206,11 @@ public class ConfigServiceImpl implements ConfigService {
         config.setKey(CrossDcLeaderElectionAction.KEY_LEASE_CONFIG);
         config.setSubKey(crossDcLeaderLeaseName);
 
-        configDao.setConfig(config, until);
+        setConfigAndUntil(config, until);
     }
 
     public String getCrossDcLeader() throws DalException {
-        ConfigTbl leaseConfig = configDao.getByKeyAndSubId(CrossDcLeaderElectionAction.KEY_LEASE_CONFIG, crossDcLeaderLeaseName);
+        ConfigTbl leaseConfig = getByKeyAndSubId(CrossDcLeaderElectionAction.KEY_LEASE_CONFIG, crossDcLeaderLeaseName);
 
         // only return when lease is active
         if (new Date().compareTo(leaseConfig.getUntil()) < 0) return leaseConfig.getValue();
@@ -213,7 +228,7 @@ public class ConfigServiceImpl implements ConfigService {
 
     private boolean getConfigBooleanByKeyAndSubKey(String key, String subKey, boolean defaultVal) {
         try {
-            ConfigTbl config = configDao.getByKeyAndSubId(key, subKey);
+            ConfigTbl config = getByKeyAndSubId(key, subKey);
             if (null == config || (new Date()).after(config.getUntil())) {
                 return defaultVal;
             }
@@ -234,7 +249,7 @@ public class ConfigServiceImpl implements ConfigService {
     }
 
     private List<ConfigModel> getActiveConfig(String key, String val) {
-        List<ConfigTbl> configTbls = configDao.findAllByKeyAndValueAndUntilAfter(key, val, new Date());
+        List<ConfigTbl> configTbls = findAllByKeyAndValueAndUntilAfter(key, val, new Date());
         if (configTbls.isEmpty()) return Collections.emptyList();
         List<ConfigModel> models = new ArrayList<>();
 
@@ -256,7 +271,7 @@ public class ConfigServiceImpl implements ConfigService {
     @Override
     public Date getAlertSystemRecoverTime() {
         try {
-            return configDao.getByKey(KEY_ALERT_SYSTEM_ON).getUntil();
+            return getConfigByKey(KEY_ALERT_SYSTEM_ON).getUntil();
         } catch (DalException e) {
             logger.error("[getAlertSystemRecovertIME]", e);
             return null;
@@ -266,9 +281,9 @@ public class ConfigServiceImpl implements ConfigService {
     @Override
     public Date getSentinelAutoProcessRecoverTime() {
         try {
-            return configDao.getByKey(KEY_SENTINEL_AUTO_PROCESS).getUntil();
+            return getConfigByKey(KEY_SENTINEL_AUTO_PROCESS).getUntil();
         } catch (DalException e) {
-            logger.error("[getAlertSystemRecovertIME]", e);
+            logger.error("[getSentinelAutoProcessRecoverTime]", e);
             return null;
         }
     }
@@ -289,7 +304,7 @@ public class ConfigServiceImpl implements ConfigService {
         try {
             ConfigModel configModel = getOrCreate(KEY_IGNORE_MIGRATION_SYSTEM_AVAILABILITY, String.valueOf(ignore));
             configModel.setVal(String.valueOf(ignore));
-            configDao.setConfig(configModel);
+            setConfig(configModel);
         } catch (Exception e) {
             logger.error("[ignoreMigrationSystemAvailability]", e);
             throw new DalUpdateException(e.getMessage());
@@ -313,7 +328,7 @@ public class ConfigServiceImpl implements ConfigService {
             ConfigModel configModel = getOrCreate(KEY_ALLOW_AUTO_MIGRATION, String.valueOf(allow));
             boolean origin = Boolean.parseBoolean(configModel.getVal());
             configModel.setVal(String.valueOf(allow));
-            configDao.setConfig(configModel);
+            setConfig(configModel);
 
             if (origin && !allow) {
                 logger.info("[setAllowAutoMigration] Auto Migration stop");
@@ -333,8 +348,21 @@ public class ConfigServiceImpl implements ConfigService {
     @Override
     public ConfigModel getConfig(String key, String subId) {
         try {
-            ConfigTbl configTbl = configDao.getByKeyAndSubId(key, subId);
+            ConfigTbl configTbl = getByKeyAndSubId(key, subId);
             return new ConfigModel(configTbl);
+        } catch (DalException e) {
+            logger.error("[getConfig]", e);
+            return null;
+        }
+    }
+
+    @Override
+    public List<ConfigModel> getConfigs(String key) {
+        try {
+            List<ConfigTbl> configTbl = getAllByKey(key);
+            List<ConfigModel> configModels = new ArrayList<>();
+            configTbl.forEach(config -> configModels.add(new ConfigModel(config)));
+            return configModels;
         } catch (DalException e) {
             logger.error("[getConfig]", e);
             return null;
@@ -344,7 +372,7 @@ public class ConfigServiceImpl implements ConfigService {
     private ConfigModel getOrCreate(String key, String defaultValue) {
         ConfigTbl configTbl = null;
         try {
-            configTbl = configDao.getByKey(key);
+            configTbl = getConfigByKey(key);
         } catch (DalException e) {
             logger.error("[getOrCreate]", e);
         }
@@ -365,7 +393,7 @@ public class ConfigServiceImpl implements ConfigService {
         config.setKey(key);
         config.setVal(defaultValue);
         try {
-            configDao.setConfig(config);
+            setConfig(config);
         } catch (DalException e) {
             logger.error("[createConfig]", e);
         }
@@ -373,18 +401,26 @@ public class ConfigServiceImpl implements ConfigService {
     }
 
     private boolean getAndResetTrueIfExpired(String key) {
+        return getAndResetExpectIfExpired(key, true);
+    }
+
+    private boolean getAndResetFalseIfExpired(String key) {
+        return getAndResetExpectIfExpired(key, false);
+    }
+
+    private boolean getAndResetExpectIfExpired(String key, boolean defaultVal) {
         try {
-            ConfigTbl config = configDao.getByKey(key);
+            ConfigTbl config = getConfigByKey(key);
             boolean result = Boolean.parseBoolean(config.getValue());
-            if(!result) {
+            if(result != defaultVal) {
                 Date expireDate = config.getUntil();
                 Date currentDate = new Date();
                 ConfigModel configModel = new ConfigModel().setKey(key)
-                        .setVal(String.valueOf(true)).setUpdateUser("System");
+                        .setVal(String.valueOf(defaultVal)).setUpdateUser("System");
                 if(currentDate.after(expireDate)) {
-                    logger.info("[getAndResetTrueIfExpired] Off time expired, reset to be true");
-                    configDao.setConfig(configModel);
-                    result = true;
+                    logger.info("[getAndResetExpectIfExpired] time expired, reset to be {}", defaultVal);
+                    setConfig(configModel);
+                    result = defaultVal;
                 }
             }
             return result;
@@ -409,5 +445,30 @@ public class ConfigServiceImpl implements ConfigService {
     public void setAutoMigrationOffChecker(AutoMigrationOffChecker checker) {
         this.autoMigrationOffChecker = checker;
     }
+
+    protected void setConfig(ConfigModel config) throws DalException {
+        configDao.setConfig(config);
+    }
+
+    protected ConfigTbl getConfigByKey(String key) throws DalException {
+        return configDao.getByKey(key);
+    }
+
+    protected void setConfigAndUntil(ConfigModel config, Date date) throws DalException {
+        configDao.setConfigAndUntil(config, date);
+    }
+
+    protected ConfigTbl getByKeyAndSubId(String key, String subId) throws DalException {
+        return configDao.getByKeyAndSubId(key, subId);
+    }
+
+    protected List<ConfigTbl> findAllByKeyAndValueAndUntilAfter(String key, String value, Date until) {
+        return configDao.findAllByKeyAndValueAndUntilAfter(key, value, until);
+    }
+
+    protected List<ConfigTbl> getAllByKey(String key) throws DalException {
+        return configDao.getAllByKey(key);
+    }
+
 
 }

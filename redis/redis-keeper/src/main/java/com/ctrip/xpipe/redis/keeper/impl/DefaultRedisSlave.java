@@ -12,6 +12,7 @@ import com.ctrip.xpipe.redis.core.protocal.protocal.EofType;
 import com.ctrip.xpipe.redis.core.protocal.protocal.SimpleStringParser;
 import com.ctrip.xpipe.redis.core.redis.operation.RedisOp;
 import com.ctrip.xpipe.redis.core.store.*;
+import com.ctrip.xpipe.redis.core.store.ratelimit.ReplDelayConfig;
 import com.ctrip.xpipe.redis.keeper.RedisClient;
 import com.ctrip.xpipe.redis.keeper.RedisKeeperServer;
 import com.ctrip.xpipe.redis.keeper.RedisSlave;
@@ -20,6 +21,7 @@ import com.ctrip.xpipe.redis.keeper.exception.RedisKeeperRuntimeException;
 import com.ctrip.xpipe.redis.keeper.util.KeeperReplIdAwareThreadFactory;
 import com.ctrip.xpipe.utils.*;
 import com.google.common.util.concurrent.MoreExecutors;
+import com.google.common.util.concurrent.RateLimiter;
 import com.google.common.util.concurrent.SettableFuture;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.*;
@@ -28,6 +30,8 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -96,7 +100,6 @@ public class DefaultRedisSlave implements RedisSlave {
 
 	public DefaultRedisSlave(RedisClient<RedisKeeperServer> redisClient){
 		this.redisClient = redisClient;
-		this.setSlaveListeningPort(redisClient.getSlaveListeningPort());
 		this.redisClient.addChannelCloseReleaseResources(this);
 		initExecutor(((DefaultRedisClient)redisClient).channel);
 	}
@@ -127,23 +130,6 @@ public class DefaultRedisSlave implements RedisSlave {
 			waitForRdb();
 		} else {
 			getLogger().info("[waitForRdbDumping][already start wait]{}", this);
-		}
-	}
-
-	@Override
-	public void waitForGtidParse() {
-
-		if(this.slaveState == SLAVE_STATE.REDIS_REPL_WAIT_RDB_GTIDSET){
-			getLogger().info("[waitForGtidParse][already waiting]{}", this);
-			return;
-		}
-
-		this.slaveState = SLAVE_STATE.REDIS_REPL_WAIT_RDB_GTIDSET;
-
-		if (null == pingFuture || pingFuture.isDone()) {
-			waitForRdb();
-		} else {
-			getLogger().info("[waitForGtidParse][already start wait]{}", this);
 		}
 	}
 
@@ -435,6 +421,11 @@ public class DefaultRedisSlave implements RedisSlave {
 		return clazz.equals(OffsetReplicationProgress.class);
 	}
 
+	@Override
+	public boolean supportRdb(RdbStore.Type rdbType) {
+		return (RdbStore.Type.RORDB.equals(rdbType) && capaOf(CAPA.RORDB)) || RdbStore.Type.NORMAL.equals(rdbType);
+	}
+
 	private int remotePort() {
 		Channel channel = channel();
 		return channel == null? 0: ((InetSocketAddress)channel.remoteAddress()).getPort();
@@ -535,6 +526,26 @@ public class DefaultRedisSlave implements RedisSlave {
 
 	public int getSlaveListeningPort() {
 		return redisClient.getSlaveListeningPort();
+	}
+
+	@Override
+	public void setIdc(String idc) {
+		redisClient.setIdc(idc);
+	}
+
+	@Override
+	public String getIdc() {
+		return redisClient.getIdc();
+	}
+
+	@Override
+	public long getDelayMilli() {
+		return redisClient.getDelayMilli();
+	}
+
+	@Override
+	public int getLimitBytesPerSecond() {
+		return redisClient.getLimitBytesPerSecond();
 	}
 
 	@Override

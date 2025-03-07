@@ -2,6 +2,9 @@ package com.ctrip.xpipe.redis.console.model;
 
 import com.google.common.collect.Maps;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -15,14 +18,18 @@ public class SentinelUsageModel {
 
     private Map<String, Long> sentinelUsages;
 
+    private Map<String, Map<String, Long>> sentinelTag;
+
     public SentinelUsageModel(String dcName) {
         this.dcName = dcName;
         sentinelUsages = Maps.newHashMap();
+        sentinelTag = Maps.newHashMap();
     }
 
     public SentinelUsageModel(String dcName, int n) {
         this.dcName = dcName;
         this.sentinelUsages = Maps.newHashMapWithExpectedSize(n);
+        this.sentinelTag = Maps.newHashMapWithExpectedSize(n);
     }
 
     public String getDcName() {
@@ -41,5 +48,16 @@ public class SentinelUsageModel {
 
     public Map<String, Long> getSentinelUsages() {
         return sentinelUsages;
+    }
+
+    public void addSentinelTag(String tag, String sentinelAddress, long usage) {
+        if (!sentinelTag.containsKey(tag)) {
+            sentinelTag.put(tag, new HashMap<>());
+        }
+        sentinelTag.get(tag).put(sentinelAddress, usage);
+    }
+
+    public Map<String, Map<String, Long>> getSentinelTag() {
+        return sentinelTag;
     }
 }

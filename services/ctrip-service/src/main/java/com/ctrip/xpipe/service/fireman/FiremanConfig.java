@@ -1,6 +1,7 @@
 package com.ctrip.xpipe.service.fireman;
 
 import com.ctrip.xpipe.config.AbstractConfigBean;
+import com.ctrip.xpipe.api.config.ConfigProvider;
 
 import java.util.Set;
 
@@ -11,6 +12,10 @@ import java.util.Set;
 public class FiremanConfig extends AbstractConfigBean {
 
     public static final String KEY_FIREMAN_POOLS = "fireman.poolids";
+
+    public FiremanConfig() {
+        super(ConfigProvider.DEFAULT.getOrCreateConfig(ConfigProvider.COMMON_CONFIG));
+    }
 
     public Set<String> getFiremanRelatedPools() {
         return getSplitStringSet(getProperty(KEY_FIREMAN_POOLS, ""));

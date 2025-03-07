@@ -3,7 +3,6 @@ package com.ctrip.xpipe.redis.checker.healthcheck.config;
 import com.ctrip.xpipe.cluster.ClusterType;
 import com.ctrip.xpipe.redis.checker.DcRelationsService;
 import com.ctrip.xpipe.redis.checker.config.CheckerConfig;
-import com.ctrip.xpipe.redis.checker.healthcheck.KeeperInstanceInfo;
 import com.ctrip.xpipe.redis.checker.healthcheck.RedisInstanceInfo;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.delay.DelayConfig;
 import org.slf4j.Logger;
@@ -20,20 +19,14 @@ public class CompositeHealthCheckConfig implements HealthCheckConfig {
 
     private HealthCheckConfig config;
 
-    public CompositeHealthCheckConfig(RedisInstanceInfo instanceInfo, CheckerConfig checkerConfig, DcRelationsService dcRelationsService) {
+    public CompositeHealthCheckConfig(RedisInstanceInfo instanceInfo, CheckerConfig checkerConfig, DcRelationsService dcRelationsService, boolean isCrossRegion) {
         logger.info("[CompositeHealthCheckConfig] {}", instanceInfo);
-        if(instanceInfo.isCrossRegion()) {
+        if(isCrossRegion) {
             config = new ProxyEnabledHealthCheckConfig(checkerConfig, dcRelationsService);
             logger.info("[CompositeHealthCheckConfig][proxied] ping down time: {}", config.pingDownAfterMilli());
         } else {
             config = new DefaultHealthCheckConfig(checkerConfig, dcRelationsService);
         }
-        logger.info("[CompositeHealthCheckConfig][{}] [config: {}]", instanceInfo, config.getClass().getSimpleName());
-    }
-
-    public CompositeHealthCheckConfig(KeeperInstanceInfo instanceInfo, CheckerConfig checkerConfig, DcRelationsService dcRelationsService) {
-        logger.info("[CompositeHealthCheckConfig] {}", instanceInfo);
-        config = new DefaultHealthCheckConfig(checkerConfig, dcRelationsService);
         logger.info("[CompositeHealthCheckConfig][{}] [config: {}]", instanceInfo, config.getClass().getSimpleName());
     }
 
@@ -50,11 +43,6 @@ public class CompositeHealthCheckConfig implements HealthCheckConfig {
     @Override
     public int checkIntervalMilli() {
         return config.checkIntervalMilli();
-    }
-
-    @Override
-    public int getKeeperCheckerIntervalMilli() {
-        return config.getKeeperCheckerIntervalMilli();
     }
 
     @Override

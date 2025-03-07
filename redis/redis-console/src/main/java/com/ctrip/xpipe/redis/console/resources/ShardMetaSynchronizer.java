@@ -18,6 +18,8 @@ import org.slf4j.LoggerFactory;
 
 import java.util.Set;
 
+import static com.ctrip.xpipe.redis.console.service.impl.ClusterServiceImpl.CLUSTER_DEFAULT_TAG;
+
 public class ShardMetaSynchronizer implements MetaSynchronizer {
     private static Logger logger = LoggerFactory.getLogger(ShardMetaSynchronizer.class);
     private Set<ShardMeta> added;
@@ -27,8 +29,13 @@ public class ShardMetaSynchronizer implements MetaSynchronizer {
     private ShardService shardService;
     private SentinelBalanceService sentinelBalanceService;
     private ConsoleConfig consoleConfig;
+    private String dcId;
 
-    public ShardMetaSynchronizer(Set<ShardMeta> added, Set<ShardMeta> removed, Set<MetaComparator> modified, RedisService redisService, ShardService shardService, SentinelBalanceService sentinelBalanceService, ConsoleConfig consoleConfig) {
+    public ShardMetaSynchronizer(Set<ShardMeta> added, Set<ShardMeta> removed, Set<MetaComparator> modified,
+                                 RedisService redisService, ShardService shardService,
+                                 SentinelBalanceService sentinelBalanceService, ConsoleConfig consoleConfig,
+                                 String dcId
+    ) {
         this.added = added;
         this.removed = removed;
         this.modified = modified;
@@ -36,6 +43,7 @@ public class ShardMetaSynchronizer implements MetaSynchronizer {
         this.shardService = shardService;
         this.sentinelBalanceService = sentinelBalanceService;
         this.consoleConfig = consoleConfig;
+        this.dcId = dcId;
     }
 
     public void sync() {
@@ -70,13 +78,13 @@ public class ShardMetaSynchronizer implements MetaSynchronizer {
                         ClusterMeta clusterMeta = shardMeta.parent();
                         ClusterType clusterType = ClusterType.lookup(clusterMeta.getType());
                         if (consoleConfig.supportSentinelHealthCheck(clusterType, clusterMeta.getId())) {
-                            shardService.findOrCreateShardIfNotExist(((ClusterMeta) shardMeta.parent()).getId(), new ShardTbl().setShardName(shardMeta.getId()).setSetinelMonitorName(shardMeta.getId()), null, sentinelBalanceService.selectMultiDcSentinels(clusterType));
+                            shardService.findOrCreateShardIfNotExist(((ClusterMeta) shardMeta.parent()).getId(), new ShardTbl().setShardName(shardMeta.getId()).setSetinelMonitorName(shardMeta.getId()), null, sentinelBalanceService.selectMultiDcSentinels(clusterType, CLUSTER_DEFAULT_TAG));
                         } else {
                             shardService.findOrCreateShardIfNotExist(((ClusterMeta) shardMeta.parent()).getId(), new ShardTbl().setShardName(shardMeta.getId()).setSetinelMonitorName(shardMeta.getId()), null, null);
                         }
 
                         CatEventMonitor.DEFAULT.logEvent(META_SYNC, String.format("[addShard]%s", shardMeta.getId()));
-                        new RedisMetaSynchronizer(Sets.newHashSet(shardMeta.getRedises()), null, null, redisService).sync();
+                        new RedisMetaSynchronizer(Sets.newHashSet(shardMeta.getRedises()), null, null, redisService, dcId).sync();
                     } catch (Exception e) {
                         logger.error("[ShardMetaSynchronizer][findOrCreateShardIfNotExist]{}", shardMeta, e);
                     }
@@ -93,7 +101,8 @@ public class ShardMetaSynchronizer implements MetaSynchronizer {
                     ShardMetaComparator shardMetaComparator = (ShardMetaComparator) metaComparator;
                     try {
                         logger.info("[ShardMetaSynchronizer][update]{} -> {}", shardMetaComparator.getCurrent(), shardMetaComparator.getFuture());
-                        new RedisMetaSynchronizer(shardMetaComparator.getAdded(), shardMetaComparator.getRemoved(), shardMetaComparator.getMofified(), redisService).sync();
+                        new RedisMetaSynchronizer(shardMetaComparator.getAdded(), shardMetaComparator.getRemoved(),
+                                shardMetaComparator.getMofified(), redisService, dcId).sync();
                     } catch (Exception e) {
                         logger.error("[ShardMetaSynchronizer][update]{} -> {}", ((ShardMetaComparator) metaComparator).getCurrent(), ((ShardMetaComparator) metaComparator).getFuture(), e);
                     }

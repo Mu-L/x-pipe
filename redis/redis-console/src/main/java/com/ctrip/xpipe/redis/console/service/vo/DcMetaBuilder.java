@@ -299,9 +299,32 @@ public class DcMetaBuilder extends AbstractCommand<Map<String, DcMeta>> {
                 dc2DcClusterShardMap = Maps.newHashMap();
 
                 List<DcClusterShardTbl> allDcClusterShards = new LinkedList<>();
+                ParallelCommandChain chain = new ParallelCommandChain(executors, false);
+
                 for (DcTbl dcTbl : allDcsTblList) {
-                    allDcClusterShards.addAll(dcClusterShardService.findAllByDcIdAndInClusterTypes(dcTbl.getId(), interestClusterTypes));
+                    chain.add(new AbstractCommand<Object>() {
+                        @Override
+                        public String getName() {
+                            return "FindAllByDcIdAndInClusterTypes";
+                        }
+
+                        @Override
+                        protected void doExecute() throws Throwable {
+                            List<DcClusterShardTbl> res = dcClusterShardService.findAllByDcIdAndInClusterTypes(dcTbl.getId(), interestClusterTypes);
+                            synchronized (allDcClusterShards) {
+                                allDcClusterShards.addAll(res);
+                            }
+                            future().setSuccess();
+                        }
+
+                        @Override
+                        protected void doReset() {
+
+                        }
+                    });
                 }
+
+                chain.execute().get();
 
                 for (DcClusterShardTbl dcClusterShardTbl : allDcClusterShards) {
                     if (dcClusterShardTbl.getDcClusterInfo() == null) {
@@ -566,6 +589,11 @@ public class DcMetaBuilder extends AbstractCommand<Map<String, DcMeta>> {
                                 shardMeta.addKeeper(redisMetaService.getKeeperMeta(shardMeta, redis));
                             }
                         } else {
+                            if (!StringUtil.isEmpty(clusterMeta.getActiveDc())
+                                    && !clusterMeta.getActiveDc().equalsIgnoreCase(dcMeta.getId())) {
+                                // redis role haven't changed but activeDc already switch in migration
+                                redis.setMaster(false);
+                            }
                             shardMeta.addRedis(redisMetaService.getRedisMeta(shardMeta, redis));
                         }
                     }

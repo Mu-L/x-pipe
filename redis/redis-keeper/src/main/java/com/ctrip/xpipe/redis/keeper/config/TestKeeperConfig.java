@@ -3,6 +3,9 @@ package com.ctrip.xpipe.redis.keeper.config;
 import com.ctrip.xpipe.redis.core.config.AbstractCoreConfig;
 import com.ctrip.xpipe.redis.keeper.store.DefaultCommandStore;
 
+import java.util.Collections;
+import java.util.List;
+
 /**
  * @author wenchao.meng
  *
@@ -16,7 +19,7 @@ public class TestKeeperConfig extends AbstractCoreConfig implements KeeperConfig
 	private long replicationStoreMaxCommandsToTransferBeforeCreateRdb = 1024;
 	private long replicationStoreMaxLWMDistanceToTransferBeforeCreateRdb = 10000;
 	private int minTimeMilliToGcAfterCreate = 2000;
-	private int rdbDumpMinIntervalMilli = 1000;
+	public int rdbDumpMinIntervalMilli = 1000;
 	private int maxPartialSyncKeepTokenRounds = 3;
 	private int partialSyncTrafficMonitorIntervalTimes = 10;
 	private long commandReaderFlyingThreshold = DefaultCommandStore.DEFAULT_COMMAND_READER_FLYING_THRESHOLD;
@@ -268,5 +271,15 @@ public class TestKeeperConfig extends AbstractCoreConfig implements KeeperConfig
 	@Override
 	public int getApplierReadIdleSeconds() {
 		return 60;
+	}
+
+	@Override
+	public boolean fsyncRateLimit() {
+		return true;
+	}
+
+	@Override
+	public boolean tryRorRdb() {
+		return true;
 	}
 }

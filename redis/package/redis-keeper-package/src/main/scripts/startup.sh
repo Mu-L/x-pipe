@@ -72,6 +72,7 @@ function changeAndMakeLogDir(){
     #../xx.conf
     sed -i 's#LOG_FOLDER=\(.*\)#LOG_FOLDER='"$logdir"'#'  $current/../*.conf
     sed -i 's#name="baseDir">.*</Property>#name="baseDir">'$logdir'</Property>#'   $current/../config/log4j2.xml
+    sed -i 's|<property name="baseDir" value="/opt/logs/[^"]*" />|<property name="baseDir" value="'$logdir'" />|'   $current/../config/arthas-logback.xml
 }
 function changeConfigLogFile() {
     current=$1
@@ -105,6 +106,11 @@ function getRole(){
     fi
     echo `toUpper $ENV`
 }
+function tryRemoveJarLog() {
+    logdir=$1
+    appname=$2
+    find "$logdir" -type f -name "$appname_*.log" -delete
+}
 
 #VARS
 FULL_DIR=`getCurrentRealPath`
@@ -113,6 +119,7 @@ SERVER_PORT=`getPortFromPathOrDefault $FULL_DIR 8080`
 JMX_PORT=` expr $SERVER_PORT + 10000 `
 IP=`ifconfig | grep "inet.10" | awk '{print $2}; NR == 1 {exit}'`
 LOG_DIR=/opt/logs/100004376
+`tryRemoveJarLog ${LOG_DIR} ${SERVICE_NAME}`
 
 if [ ! $SERVER_PORT -eq 8080 ];then
     LOG_DIR=${LOG_DIR}_$SERVER_PORT
@@ -156,22 +163,15 @@ else
     IDC=`getIdc`
     total=`getTotalMem`
     if ([ $IDC = "PTJQ" ] || [ $IDC = "PTOY" ]) && ([ "$total" -gt 60 ]);then
-        #MB
-        USED_MEM=30720
-        XMN=11520
-        MAX_DIRECT=5120
-    elif [ $IDC = "UAT-AWS" ]; then
-        #MB
-        USED_MEM=6144
-        XMN=2400
-        MAX_DIRECT=300
+        USED_MEM=30
+        XMN=12
+        MAX_DIRECT=5
     else
-        #MB
-        USED_MEM=1600
-        XMN=600
-        MAX_DIRECT=100
+        USED_MEM=`getSafeXmx`
+        XMN=`getSafeXmn $USED_MEM`
+        MAX_DIRECT=1
     fi
-    JAVA_OPTS="$JAVA_OPTS -Xms${USED_MEM}m -Xmx${USED_MEM}m -Xmn${XMN}m -XX:+AlwaysPreTouch  -XX:MaxDirectMemorySize=${MAX_DIRECT}m"
+    JAVA_OPTS="$JAVA_OPTS -Xms${USED_MEM}g -Xmx${USED_MEM}g -Xmn${XMN}g -XX:+AlwaysPreTouch  -XX:MaxDirectMemorySize=${MAX_DIRECT}g"
 fi
 export JAVA_OPTS="$JAVA_OPTS -Dio.netty.maxDirectMemory=0 -XX:MetaspaceSize=128m -XX:MaxMetaspaceSize=128m -XX:+UseParNewGC -XX:MaxTenuringThreshold=2 -XX:+UseConcMarkSweepGC -XX:+UseCMSInitiatingOccupancyOnly -XX:+ScavengeBeforeFullGC -XX:+UseCMSCompactAtFullCollection -XX:+CMSParallelRemarkEnabled -XX:CMSFullGCsBeforeCompaction=9 -XX:CMSInitiatingOccupancyFraction=60 -XX:-CMSClassUnloadingEnabled -XX:SoftRefLRUPolicyMSPerMB=0 -XX:-ReduceInitialCardMarks -XX:+CMSPermGenSweepingEnabled -XX:CMSInitiatingPermOccupancyFraction=70 -XX:+ExplicitGCInvokesConcurrent -XX:+PrintGCDetails -XX:+PrintGCDateStamps -XX:+PrintGCApplicationConcurrentTime -XX:+PrintHeapAtGC -XX:+HeapDumpOnOutOfMemoryError -XX:-OmitStackTraceInFastThrow -Duser.timezone=Asia/Shanghai -Dclient.encoding.override=UTF-8 -Dfile.encoding=UTF-8 -Xloggc:$LOG_DIR/heap_trace.txt -XX:HeapDumpPath=$LOG_DIR/HeapDumpOnOutOfMemoryError/  -Dcom.sun.management.jmxremote.port=$JMX_PORT -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false -Djava.rmi.server.hostname=${IP} -XX:+UnlockCommercialFeatures -XX:+FlightRecorder -Djava.security.egd=file:/dev/./urandom"
 

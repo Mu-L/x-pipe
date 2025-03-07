@@ -1,8 +1,10 @@
 package com.ctrip.xpipe.service.migration;
 
+import com.ctrip.xpipe.api.codec.Codec;
 import com.ctrip.xpipe.api.migration.DC_TRANSFORM_DIRECTION;
 import com.ctrip.xpipe.api.migration.DcMapper;
 import com.ctrip.xpipe.api.migration.OuterClientException;
+import com.ctrip.xpipe.api.migration.OuterClientService;
 import com.ctrip.xpipe.api.monitor.Task;
 import com.ctrip.xpipe.endpoint.ClusterShardHostPort;
 import com.ctrip.xpipe.endpoint.HostPort;
@@ -17,8 +19,11 @@ import com.ctrip.xpipe.utils.StringUtil;
 import com.ctrip.xpipe.utils.VisibleForTesting;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.RestOperations;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import java.net.InetSocketAddress;
 import java.util.*;
@@ -43,6 +48,8 @@ public class CRedisService extends AbstractOuterClientService {
 
 	private static final ParameterizedTypeReference<List<ClusterInfo>> clustersRespTypeDef =
 			new ParameterizedTypeReference<List<ClusterInfo>>(){};
+	private static final ParameterizedTypeReference<OuterClientDataResp<List<ClusterExcludedIdcInfo>>> excludedIdcInfosRespTypeDef =
+			new ParameterizedTypeReference<OuterClientDataResp<List<ClusterExcludedIdcInfo>>>(){};
 
 	@Override
 	public int getOrder() {
@@ -73,6 +80,25 @@ public class CRedisService extends AbstractOuterClientService {
 			return instance.getResult().isCanRead();
 		}
 		throw new IllegalStateException("[isInstanceUp]" + clusterShardHostPort + "," + instance.getMessage());
+	}
+
+	@Override
+	public Map<HostPort, Boolean> batchQueryInstanceStatus(String cluster, Set<HostPort> instances) throws OuterClientException {
+		CRedisGeneralResp<List<InstanceStatus>> credisResp = batchGetInstances(cluster, instances);
+		if (!credisResp.isSuccess()) {
+			throw new IllegalStateException("[batchQueryInstanceStatus][" + cluster + "]" + credisResp.getMessage());
+		}
+
+		List<InstanceStatus> credisInstances = credisResp.getResult();
+		Map<HostPort, Boolean> result = new HashMap<>();
+		for (InstanceStatus credisInstance: credisInstances) {
+			HostPort instance = new HostPort(credisInstance.getIPAddress(), credisInstance.getPort());
+			if (instances.contains(instance)) {
+				result.put(instance, credisInstance.isCanRead());
+			}
+		}
+
+		return result;
 	}
 
 	@Override
@@ -139,9 +165,17 @@ public class CRedisService extends AbstractOuterClientService {
                     HostPort hostPort = clusterShardHostPort.getHostPort();
                     String reqType = state ? "markInstanceUp" : "markInstanceDown";
 
-                    MarkInstanceResponse response = doRequest(reqType, cluster, () ->
-							restOperations.postForObject(address + "?clusterName={cluster}&ip={ip}&port={port}&canRead={canRead}",
-							null, MarkInstanceResponse.class, cluster, hostPort.getHost(), hostPort.getPort(), state)
+                    MarkInstanceResponse response = doRequest(reqType, cluster, () -> {
+								UriComponentsBuilder uriBuilder = UriComponentsBuilder.fromHttpUrl(address);
+								uriBuilder.queryParam("clusterName", cluster)
+										.queryParam("ip", hostPort.getHost())
+										.queryParam("port", hostPort.getPort())
+										.queryParam("canRead", state);
+								if (null != clusterShardHostPort.getActiveDc()) {
+									uriBuilder.queryParam("activeDc", clusterShardHostPort.getActiveDc());
+								}
+								return restOperations.postForObject(uriBuilder.toUriString(), null, MarkInstanceResponse.class);
+							}
 					);
                     logger.info("[doMarkInstance][end]{},{},{}", clusterShardHostPort, state, response);
                     if(!response.isSuccess()){
@@ -161,6 +195,40 @@ public class CRedisService extends AbstractOuterClientService {
             });
 		} catch (Exception e) {
 			throw new OuterClientException("mark:" + clusterShardHostPort+ ":" + state, e);
+		}
+
+	}
+
+	@Override
+	public void batchMarkInstance(OuterClientService.MarkInstanceRequest markInstanceRequest) throws OuterClientException {
+		try {
+			catTransactionMonitor.logTransaction(TYPE, String.format("doBatchMarkInstance-%s", markInstanceRequest.getClusterName()), new Task() {
+				@Override
+				public void go() throws Exception {
+
+					logger.info("[doBatchMarkInstance][begin]{}", markInstanceRequest);
+					String address = CREDIS_SERVICE.BATCH_SWITCH_STATUS.getRealPath(credisConfig.getCredisServiceAddress());
+					String reqType = "batchMarkInstance";
+
+					MarkInstanceResponse response = doRequest(reqType, markInstanceRequest.getClusterName(),
+							() -> restOperations.postForObject(address, markInstanceRequest, MarkInstanceResponse.class));
+					logger.info("[doBatchMarkInstance][end]{},{}", markInstanceRequest, response);
+					if(!response.isSuccess()){
+						throw new IllegalStateException(String.format("%s, response:%s", markInstanceRequest, response));
+					}
+				}
+
+				@Override
+				public Map getData() {
+					return new HashMap<String, Object>() {{
+						put("cluster", markInstanceRequest.getClusterName());
+						put("hostPortDcStatuses", markInstanceRequest.getHostPortDcStatuses());
+						put("activeDc", markInstanceRequest.getActiveDc());
+					}};
+				}
+			});
+		} catch (Exception e) {
+			throw new OuterClientException("batch mark:" + markInstanceRequest, e);
 		}
 
 	}
@@ -292,6 +360,41 @@ public class CRedisService extends AbstractOuterClientService {
 		});
 	}
 
+	@Override
+	public boolean batchExcludeIdcs(List<ClusterExcludedIdcInfo> excludedClusterIdcs) throws Exception {
+		String NAME = "batch-exclude-idcs";
+		return catTransactionMonitor.logTransaction(TYPE, NAME, new Callable<Boolean>() {
+
+			@Override
+			public Boolean call() throws Exception {
+				logger.info("[batchExcludeIdcs] {}", Codec.DEFAULT.encode(excludedClusterIdcs));
+				String address = CREDIS_SERVICE.BATCH_EXCLUDE_IDCS.getRealPath(credisConfig.getCredisServiceAddress());
+				SimpleResult result = doRequest("batchExcludeClusterDc", null,
+						() -> restOperations.postForObject(address, excludedClusterIdcs, SimpleResult.class));
+				if (result != null && result.getSuccess()) {
+					CatEventMonitor.DEFAULT.logEvent(TYPE, NAME + " - success");
+					logger.info("[batchExcludeIdcs][success]");
+					return true;
+				}
+				String failMsg = null == result ? "null" : result.getMessage();
+				CatEventMonitor.DEFAULT.logEvent(TYPE, NAME + " - " + failMsg);
+				logger.info("[batchExcludeIdcs][fail] {}", failMsg);
+				return false;
+			}
+		});
+	}
+
+	@Override
+	public OuterClientDataResp<List<ClusterExcludedIdcInfo>> getAllExcludedIdcs() throws Exception {
+		return catTransactionMonitor.logTransaction(TYPE, "getAllExcludedIdcs", () -> {
+			String address = CREDIS_SERVICE.BATCH_EXCLUDE_IDCS.getRealPath(credisConfig.getCredisServiceAddress());
+			return doRequest("getAllExcludedIdcs", null,
+					() -> restOperations
+							.exchange(address, HttpMethod.GET, null, excludedIdcInfosRespTypeDef)
+							.getBody());
+		});
+	}
+
 	String convertDcName(String dc) {
 		return DcMapper.INSTANCE.getDc(dc);
 	}
@@ -299,7 +402,7 @@ public class CRedisService extends AbstractOuterClientService {
 	public GetInstanceResult getInstance(ClusterShardHostPort clusterShardHostPort) throws OuterClientException {
 
 		try {
-			return catTransactionMonitor.logTransaction(TYPE, String.format("getInstance"), new Callable<GetInstanceResult>() {
+			return catTransactionMonitor.logTransaction(TYPE, "getInstance", new Callable<GetInstanceResult>() {
                 @Override
                 public GetInstanceResult call() throws Exception {
 
@@ -314,6 +417,29 @@ public class CRedisService extends AbstractOuterClientService {
             });
 		} catch (Exception e) {
 			throw new OuterClientException("getInstance:" + clusterShardHostPort, e);
+		}
+	}
+
+	private static final ParameterizedTypeReference<CRedisGeneralResp<List<InstanceStatus>>> batchInstancesRespType =
+			new ParameterizedTypeReference<CRedisGeneralResp<List<InstanceStatus>>>(){};
+	public CRedisGeneralResp<List<InstanceStatus>> batchGetInstances(String cluster, Set<HostPort> instances) throws OuterClientException {
+
+		try {
+			return catTransactionMonitor.logTransaction(TYPE, "batchGetInstances", new Callable<CRedisGeneralResp<List<InstanceStatus>>>() {
+				@Override
+				public CRedisGeneralResp<List<InstanceStatus>> call() throws Exception {
+
+					String address = CREDIS_SERVICE.BATCH_QUERY_STATUS.getRealPath(credisConfig.getCredisServiceAddress());
+					ResponseEntity<CRedisGeneralResp<List<InstanceStatus>>> resp = doRequest("batchGetInstances", cluster,
+							() -> {
+								HttpEntity<Set<HostPort>> httpEntity = new HttpEntity<>(instances);
+						return restOperations.exchange(address, HttpMethod.POST, httpEntity, batchInstancesRespType);
+							});
+					return resp.getBody();
+				}
+			});
+		} catch (Exception e) {
+			throw new OuterClientException("batchGetInstances:" + cluster, e);
 		}
 	}
 
@@ -394,31 +520,6 @@ public class CRedisService extends AbstractOuterClientService {
 		}
 	}
 
-	public static class MarkInstanceRequest{
-
-		private String ip;
-		private int port;
-		private boolean canRead;
-
-		public MarkInstanceRequest(String ip, int port, boolean canRead){
-			this.ip = ip;
-			this.port = port;
-			this.canRead = canRead;
-		}
-
-		public String getIp() {
-			return ip;
-		}
-
-		public int getPort() {
-			return port;
-		}
-
-		public boolean isCanRead() {
-			return canRead;
-		}
-	}
-
 	public static class MarkInstanceResponse implements CRedisResp {
 
 		private boolean success;
@@ -443,6 +544,33 @@ public class CRedisService extends AbstractOuterClientService {
 		@Override
 		public String toString() {
 			return String.format("success:%s, message:%s", success, message);
+		}
+	}
+
+	@JsonIgnoreProperties(ignoreUnknown = true)
+	public static class CRedisGeneralResp<T> implements CRedisResp {
+
+		private boolean success;
+
+		private String message;
+
+		private T result;
+
+		public CRedisGeneralResp() {
+
+		}
+
+		@Override
+		public boolean isSuccess() {
+			return success;
+		}
+
+		public String getMessage() {
+			return message;
+		}
+
+		public T getResult() {
+			return result;
 		}
 	}
 

@@ -3,6 +3,7 @@ package com.ctrip.xpipe.redis.console.migration.auto;
 import com.ctrip.xpipe.api.migration.auto.MonitorService;
 import com.ctrip.xpipe.concurrent.AbstractExceptionLogTask;
 import com.ctrip.xpipe.exception.XpipeRuntimeException;
+import com.ctrip.xpipe.redis.core.beacon.BeaconSystem;
 import com.ctrip.xpipe.redis.core.entity.DcMeta;
 import com.ctrip.xpipe.redis.core.entity.XpipeMeta;
 import com.ctrip.xpipe.redis.core.meta.MetaCache;
@@ -199,6 +200,11 @@ public class DefaultMonitorClusterManager {
     @VisibleForTesting
     public void startSyncRingTaskNow() {
         this.executor.schedule(new ClustersRingSyncTask(), 5, TimeUnit.MILLISECONDS);
+    }
+
+    @VisibleForTesting
+    protected SortedMap<Integer, MonitorService> getRing() {
+        return ring;
     }
 
 }

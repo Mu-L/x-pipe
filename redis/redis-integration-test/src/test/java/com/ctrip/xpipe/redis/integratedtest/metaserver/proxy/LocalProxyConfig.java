@@ -97,6 +97,11 @@ public class LocalProxyConfig implements ProxyConfig {
     }
 
     @Override
+    public boolean shouldReportTraffic() {
+        return true;
+    }
+
+    @Override
     public ByteToMessageDecoder getCompressDecoder() {
         return new ZstdDecoder();
     }
@@ -105,7 +110,8 @@ public class LocalProxyConfig implements ProxyConfig {
     public MessageToByteEncoder<ByteBuf> getCompressEncoder() {
         return new ZstdEncoder();
     }
-    String certDir = "./src/test/resources/cert/";
+
+    String certDir = System.getProperty("java.io.tmpdir");
     //    @Override
     public String getServerCertChainFilePath() {
         return certDir + "/server.crt";

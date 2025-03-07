@@ -101,19 +101,7 @@ public class OuterClientServiceProcessorTest extends AbstractRedisTest {
         when(instance.getHealthCheckConfig()).thenReturn(config);
 
         FinalStateSetterManager<ClusterShardHostPort, Boolean> manager = mock(FinalStateSetterManager.class);
-        when(defaultDelayPingActionCollector.getHealthStateSetterManager()).thenReturn(manager);
         ((DefaultInstanceSickHandler)instanceSickHandler).setScheduled(scheduled);
-    }
-
-    @Test
-    public void testOnEventConfiguredNotMarkDown() throws HealthEventProcessorException {
-
-        when(checkerConfig.getDelayedMarkDownDcClusters()).thenReturn(
-                Sets.newHashSet(new DcClusterDelayMarkDown().setDcId(dc).setClusterId(cluster)));
-        when(metaCache.inBackupDc(hostPort)).thenReturn(true);
-        when(siteStability.isSiteStable()).thenReturn(true);
-        processor.onEvent(new InstanceSick(instance));
-        verify(alertManager, atLeastOnce()).alert(instance.getCheckInfo(), ALERT_TYPE.INSTANCE_SICK_BUT_DELAY_MARK_DOWN, dc);
     }
 
     @Test

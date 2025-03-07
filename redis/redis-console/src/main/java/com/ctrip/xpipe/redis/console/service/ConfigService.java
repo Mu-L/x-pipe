@@ -27,7 +27,11 @@ public interface ConfigService {
 
     String KEY_KEEPER_CONTAINER_STANDARD = "keeper.container.standard";
 
+    String KEY_KEEPER_CONTAINER_IO_RATE = "keeper.container.io.rate";
+
     void setKeyKeeperContainerStandard(ConfigModel config) throws Exception;
+
+    void setKeyKeeperContainerIoRate(ConfigModel config) throws Exception;
 
     void startAlertSystem(ConfigModel config) throws DalException;
 
@@ -76,4 +80,6 @@ public interface ConfigService {
     ConfigModel getConfig(String key);
 
     ConfigModel getConfig(String key, String subId);
+
+    List<ConfigModel> getConfigs(String key);
 }

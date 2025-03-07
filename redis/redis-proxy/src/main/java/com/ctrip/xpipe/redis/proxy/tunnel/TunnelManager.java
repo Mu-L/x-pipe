@@ -19,7 +19,12 @@ public interface TunnelManager extends Releasable, Observer {
 
     void remove(Channel frontendChannel);
 
+    void removeAll();
+
     List<Tunnel> tunnels();
 
     Tunnel getById(String id);
+
+    void markAllUnRead();
+
 }

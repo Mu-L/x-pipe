@@ -39,6 +39,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
+import static com.ctrip.xpipe.redis.console.service.impl.ClusterServiceImpl.CLUSTER_DEFAULT_TAG;
 import static com.ctrip.xpipe.spring.AbstractController.CLUSTER_NAME_PATH_VARIABLE;
 import static com.ctrip.xpipe.spring.AbstractController.SHARD_NAME_PATH_VARIABLE;
 
@@ -89,33 +90,33 @@ public class SentinelUpdateController {
     private static final JsonCodec jsonTool = new JsonCodec(true, true);
 
     @PostMapping("/rebalance/sentinels/{dcName}/execute")
-    public RetMessage reBalanceSentinels(@PathVariable String dcName, @RequestParam(defaultValue = "true") boolean backupDcOnly) {
+    public RetMessage reBalanceSentinels(@PathVariable String dcName, @RequestParam(defaultValue = "true") boolean backupDcOnly, @RequestParam(defaultValue = CLUSTER_DEFAULT_TAG) String tag) {
         DcTbl dcTbl = dcService.findByDcName(dcName);
         if (null == dcTbl) return RetMessage.createFailMessage("unknown dc " + dcName);
 
         if (backupDcOnly) {
-            sentinelBalanceService.rebalanceBackupDcSentinel(dcTbl.getDcName());
+            sentinelBalanceService.rebalanceBackupDcSentinel(dcTbl.getDcName(), tag);
         } else {
-            sentinelBalanceService.rebalanceDcSentinel(dcTbl.getDcName(), ClusterType.ONE_WAY);
+            sentinelBalanceService.rebalanceDcSentinel(dcTbl.getDcName(), ClusterType.ONE_WAY, tag);
         }
         return RetMessage.createSuccessMessage();
     }
 
     @PostMapping("/rebalance/sentinels/{dcName}/terminate")
-    public RetMessage terminateBalanceSentinels(@PathVariable String dcName) {
+    public RetMessage terminateBalanceSentinels(@PathVariable String dcName, @RequestParam(defaultValue = CLUSTER_DEFAULT_TAG) String tag) {
         DcTbl dcTbl = dcService.findByDcName(dcName);
         if (null == dcTbl) return RetMessage.createFailMessage("unknown dc " + dcName);
 
-        sentinelBalanceService.cancelCurrentBalance(dcTbl.getDcName(), ClusterType.ONE_WAY);
+        sentinelBalanceService.cancelCurrentBalance(dcTbl.getDcName(), ClusterType.ONE_WAY, tag);
         return RetMessage.createSuccessMessage();
     }
 
     @GetMapping("/rebalance/sentinels/{dcName}/process")
-    public RetMessage getSentinelsBalanceProcess(@PathVariable String dcName) {
+    public RetMessage getSentinelsBalanceProcess(@PathVariable String dcName, @RequestParam(defaultValue = CLUSTER_DEFAULT_TAG) String tag) {
         DcTbl dcTbl = dcService.findByDcName(dcName);
         if (null == dcTbl) return RetMessage.createFailMessage("unknown dc " + dcName);
 
-        SentinelBalanceTask balanceTask = sentinelBalanceService.getBalanceTask(dcTbl.getDcName(), ClusterType.ONE_WAY);
+        SentinelBalanceTask balanceTask = sentinelBalanceService.getBalanceTask(dcTbl.getDcName(), ClusterType.ONE_WAY, tag);
         if (null == balanceTask) {
             return RetMessage.createSuccessMessage("no task");
         } else {
@@ -135,6 +136,9 @@ public class SentinelUpdateController {
     @RequestMapping(value = "/sentinels", method = RequestMethod.POST)
     public RetMessage addSentinel(@RequestBody SentinelGroupModel sentinelGroupModel) {
         try {
+            if (sentinelGroupModel.getTag() == null) {
+                sentinelGroupModel.setTag(CLUSTER_DEFAULT_TAG);
+            }
             sentinelGroupService.addSentinelGroup(sentinelGroupModel);
             return RetMessage.createSuccessMessage("Successfully create Sentinel");
         } catch (Exception e) {
@@ -161,6 +165,43 @@ public class SentinelUpdateController {
         try {
             sentinelGroupService.reheal(sentinelId);
             return RetMessage.createSuccessMessage("Successfully reheal Sentinel");
+        } catch (Exception e) {
+            return RetMessage.createFailMessage(e.getMessage());
+        }
+    }
+
+    @RequestMapping(value = "/sentinels/active/{sentinelId}", method = RequestMethod.GET)
+    public RetMessage getSentinelActiveStatus(@PathVariable Long sentinelId) {
+        try {
+            SentinelGroupModel setinelTbl = sentinelGroupService.findById(sentinelId);
+            if (setinelTbl == null) {
+                return RetMessage.createSuccessMessage("Sentinel does not exist or deleted");
+            }
+            return RetMessage.createSuccessMessage("Active status: " + setinelTbl.isActive());
+        } catch (Exception e) {
+            return RetMessage.createFailMessage(e.getMessage());
+        }
+    }
+
+    @RequestMapping(value = "/sentinels/active/{sentinelId}/{activeStatus}", method = RequestMethod.PUT)
+    public RetMessage updateSentinelActiveStatus(@PathVariable Long sentinelId, @PathVariable Integer activeStatus) {
+        try {
+            SentinelGroupModel setinelTbl = sentinelGroupService.findById(sentinelId);
+            if (setinelTbl == null) {
+                return RetMessage.createSuccessMessage("Sentinel does not exist or deleted");
+            }
+            sentinelGroupService.updateActive(sentinelId, activeStatus);
+            return RetMessage.createSuccessMessage("Successfully update ActiveStatus: " + activeStatus);
+        } catch (Exception e) {
+            return RetMessage.createFailMessage(e.getMessage());
+        }
+    }
+
+    @RequestMapping(value = "/sentinels/tag/{sentinelId}/{tag}", method = RequestMethod.PUT)
+    public RetMessage updateSentinelTag(@PathVariable Long sentinelId, @PathVariable String tag) {
+        try {
+            SentinelGroupTbl sentinelGroupTbl = sentinelGroupService.updateTag(sentinelId, tag);
+            return RetMessage.createSuccessMessage("Successfully update tag, sentinelGroupTbl : " + sentinelGroupTbl);
         } catch (Exception e) {
             return RetMessage.createFailMessage(e.getMessage());
         }
@@ -425,6 +466,27 @@ public class SentinelUpdateController {
         }
     }
 
+    @PostMapping(value = "/bind/cluster/sentinels/{dcName}/" + CLUSTER_NAME_PATH_VARIABLE)
+    public RetMessage addClusterSentinels(@PathVariable String dcName, @PathVariable String clusterName, @RequestBody SentinelMeta sentinelMeta) {
+        try {
+            logger.info("[bindSentinel][{}-{}] {}", dcName, clusterName, sentinelMeta.getId());
+            List<DcClusterShardTbl> dcClusterShardTbls = dcClusterShardService.findAllByDcCluster(dcName, clusterName);
+            SentinelGroupModel sentinelGroup = sentinelGroupService.findById(sentinelMeta.getId());
+            if (null == sentinelGroup) {
+                logger.debug("[bindSentinel][fail] no sentinel found");
+                return RetMessage.createFailMessage("no sentinel " + sentinelMeta.getId());
+            }
+            for (DcClusterShardTbl dcClusterShardTbl: dcClusterShardTbls) {
+                dcClusterShardTbl.setSetinelId(sentinelGroup.getSentinelGroupId());
+                dcClusterShardService.updateDcClusterShard(dcClusterShardTbl);
+            }
+            return RetMessage.createSuccessMessage();
+        } catch (Throwable th) {
+            logger.warn("[bindSentinel][fail]", th);
+            return RetMessage.createFailMessage(th.getMessage());
+        }
+    }
+
     void addSentinels(SentinelGroupModel sentinelGroup, String sentinelMonitorName, HostPort master) throws InterruptedException, ExecutionException, TimeoutException {
         ParallelCommandChain monitorChain = new ParallelCommandChain(MoreExecutors.directExecutor(), false);
         for (SentinelInstanceModel sentinelModel : sentinelGroup.getSentinels()) {
@@ -505,7 +567,7 @@ public class SentinelUpdateController {
         ClusterType dcClusterType = azGroupType == null
             ? clusterType : azGroupType;
 
-        SentinelGroupModel selected = sentinelBalanceService.selectSentinel(dcName, dcClusterType);
+        SentinelGroupModel selected = sentinelBalanceService.selectSentinel(dcName, dcClusterType, clusterTbl.getTag());
         if (dcClusterShardTbl.getSetinelId() == selected.getSentinelGroupId())
             return RetMessage.createSuccessMessage("current sentinel is suitable, no change");
 

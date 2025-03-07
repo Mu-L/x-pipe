@@ -1,8 +1,13 @@
 package com.ctrip.xpipe.redis.console.controller.consoleportal.migration;
 
 import com.ctrip.xpipe.api.command.CommandFuture;
+import com.ctrip.xpipe.api.foundation.FoundationService;
 import com.ctrip.xpipe.api.sso.UserInfoHolder;
 import com.ctrip.xpipe.command.DefaultCommandFuture;
+import com.ctrip.xpipe.redis.checker.config.impl.CheckConfigBean;
+import com.ctrip.xpipe.redis.checker.config.impl.CommonConfigBean;
+import com.ctrip.xpipe.redis.checker.config.impl.ConsoleConfigBean;
+import com.ctrip.xpipe.redis.checker.config.impl.DataCenterConfigBean;
 import com.ctrip.xpipe.redis.console.AbstractConsoleTest;
 import com.ctrip.xpipe.redis.console.config.ConsoleConfig;
 import com.ctrip.xpipe.redis.console.config.impl.DefaultConsoleConfig;
@@ -83,7 +88,10 @@ public class ExclusiveThreadsForMigrationTest extends AbstractConsoleTest {
 
         @Bean
         public ConsoleConfig consoleConfig() {
-            return new DefaultConsoleConfig();
+            return new DefaultConsoleConfig(new CheckConfigBean(FoundationService.DEFAULT),
+                    new ConsoleConfigBean(FoundationService.DEFAULT),
+                    new DataCenterConfigBean(),
+                    new CommonConfigBean());
         }
 
         @Bean
@@ -94,6 +102,7 @@ public class ExclusiveThreadsForMigrationTest extends AbstractConsoleTest {
 
     @Before
     public void beforeRestTemplateFactoryTest() throws Exception {
+        this.port = randomPort();
         restOperations = RestTemplateFactory.createCommonsHttpRestTemplate(2, 2, 1200, 60000);
 
         springApplicationStarter = new SpringApplicationStarter(port, 1, SlowController.class, TestDependency.class, MigrationApi4Beacon.class);

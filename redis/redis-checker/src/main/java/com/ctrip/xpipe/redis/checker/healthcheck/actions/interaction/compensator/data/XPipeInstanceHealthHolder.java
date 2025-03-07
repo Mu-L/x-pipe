@@ -60,6 +60,31 @@ public class XPipeInstanceHealthHolder {
         return new UpDownInstances(healthyInstances, unhealthyInstances);
     }
 
+    public Map<HostPort, Boolean> getAllHealthStatus(int quorum) {
+        Set<HostPort> allHostPorts = new HashSet<>();
+        for (Map<HostPort, HealthStatusDesc> hostPortHealthStatusDescMap : healthCheckResult) {
+            allHostPorts.addAll(hostPortHealthStatusDescMap.keySet());
+        }
+        Map<HostPort, Boolean> result = new HashMap<>();
+        for (HostPort hostPort : allHostPorts) {
+            result.put(hostPort, aggregate(hostPort, quorum));
+        }
+        return result;
+    }
+
+    public Map<HostPort, Boolean> getOtherCheckerLastMark() {
+        Map<HostPort, Boolean> lastMarks = new HashMap<>();
+        for (Map<HostPort, HealthStatusDesc> hostPortHealthStatusDescMap : healthCheckResult) {
+            for (Map.Entry<HostPort, HealthStatusDesc> entry: hostPortHealthStatusDescMap.entrySet()) {
+                if (null != entry.getValue().getLastMarkHandled()) {
+                    lastMarks.put(entry.getKey(), entry.getValue().getLastMarkHandled());
+                }
+            }
+        }
+
+        return lastMarks;
+    }
+
     public List<HealthStatusDesc> getHealthStatus(HostPort hostPort) {
         List<HealthStatusDesc> statusList = new ArrayList<>();
         healthCheckResult.forEach(result -> {

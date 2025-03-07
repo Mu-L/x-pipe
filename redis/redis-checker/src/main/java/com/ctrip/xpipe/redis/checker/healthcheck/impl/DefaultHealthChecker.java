@@ -4,16 +4,14 @@ import com.ctrip.xpipe.api.foundation.FoundationService;
 import com.ctrip.xpipe.cluster.ClusterType;
 import com.ctrip.xpipe.lifecycle.AbstractLifecycle;
 import com.ctrip.xpipe.lifecycle.LifecycleHelper;
-import com.ctrip.xpipe.redis.checker.CheckerConsoleService;
 import com.ctrip.xpipe.redis.checker.config.CheckerConfig;
 import com.ctrip.xpipe.redis.checker.healthcheck.HealthCheckInstanceManager;
 import com.ctrip.xpipe.redis.checker.healthcheck.HealthChecker;
 import com.ctrip.xpipe.redis.checker.healthcheck.meta.MetaChangeManager;
 import com.ctrip.xpipe.redis.core.entity.*;
-import com.ctrip.xpipe.redis.core.meta.CurrentDcAllMeta;
-import com.ctrip.xpipe.redis.core.meta.KeeperContainerDetailInfo;
 import com.ctrip.xpipe.redis.core.meta.MetaCache;
 import com.ctrip.xpipe.utils.StringUtil;
+import com.ctrip.xpipe.utils.VisibleForTesting;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -21,12 +19,9 @@ import org.springframework.stereotype.Component;
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 import javax.annotation.Resource;
-import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 
-import static com.ctrip.xpipe.redis.core.meta.comparator.KeeperContainerMetaComparator.getAllKeeperContainerDetailInfoFromDcMeta;
 import static com.ctrip.xpipe.spring.AbstractSpringConfigContext.SCHEDULED_EXECUTOR;
 
 /**
@@ -50,14 +45,8 @@ public class DefaultHealthChecker extends AbstractLifecycle implements HealthChe
     @Autowired
     private CheckerConfig checkerConfig;
 
-    @Autowired
-    private CheckerConsoleService checkerConsoleService;
-
     @Resource(name = SCHEDULED_EXECUTOR)
     private ScheduledExecutorService scheduled;
-
-    @Resource
-    private CurrentDcAllMeta currentDcAllMeta;
 
     private static final String currentDcId = FoundationService.DEFAULT.getDataCenter();
 
@@ -117,8 +106,13 @@ public class DefaultHealthChecker extends AbstractLifecycle implements HealthChe
         super.doStop();
     }
 
+    @VisibleForTesting
+    protected void setInstanceManager(HealthCheckInstanceManager instanceManager) {
+        this.instanceManager = instanceManager;
+    }
 
-    void generateHealthCheckInstances() {
+    @VisibleForTesting
+    protected void generateHealthCheckInstances() {
         XpipeMeta meta = metaCache.getXpipeMeta();
 
         for(DcMeta dcMeta : meta.getDcs().values()) {
@@ -126,36 +120,29 @@ public class DefaultHealthChecker extends AbstractLifecycle implements HealthChe
                 continue;
             }
 
-            if (currentDcId.equalsIgnoreCase(dcMeta.getId())) {
-                Map<Long, KeeperContainerDetailInfo> keeperContainerDetailInfoMap
-                        = getAllKeeperContainerDetailInfoFromDcMeta(dcMeta, currentDcAllMeta.getCurrentDcAllMeta());
-                keeperContainerDetailInfoMap.values().forEach(this::generateHealthCheckInstances);
-            }
-
             for(ClusterMeta cluster : dcMeta.getClusters().values()) {
+                try {
+                    ClusterType clusterType = ClusterType.lookup(cluster.getType());
 
-                ClusterType clusterType = ClusterType.lookup(cluster.getType());
+                    if (dcClusterIsMasterType(clusterType, cluster) && clusterDcIsCurrentDc(cluster)){
+                        generateHealthCheckInstances(cluster);
+                    }
+                    if (hasSingleActiveDc(clusterType) && isClusterActiveIdcCurrentIdc(cluster)) {
+                        generateHealthCheckInstances(cluster);
+                    }
+                    if (hasMultipleActiveDcs(clusterType) && isClusterInCurrentIdc(cluster)) {
+                        generateHealthCheckInstances(cluster);
+                    }
 
-                if (dcClusterIsMasterType(clusterType, cluster) && clusterDcIsCurrentDc(cluster)){
-                    generateHealthCheckInstances(cluster);
-                }
-                if (hasSingleActiveDc(clusterType) && isClusterActiveIdcCurrentIdc(cluster)) {
-                    generateHealthCheckInstances(cluster);
-                }
-                if (hasMultipleActiveDcs(clusterType) && isClusterInCurrentIdc(cluster)) {
-                    generateHealthCheckInstances(cluster);
+                    if (clusterType == ClusterType.ONE_WAY && isClusterActiveDcCrossRegion(cluster) && clusterDcIsCurrentDc(cluster)) {
+                        generatePsubPingActionHealthCheckInstances(cluster);
+                    }
+
+                } catch (Exception e) {
+                    logger.error("generate cluster health check instances, clusterMeta:{}", cluster, e);
                 }
 
             }
-        }
-    }
-
-    private void generateHealthCheckInstances(KeeperContainerDetailInfo keeperContainerDetailInfo) {
-        for (KeeperMeta keeperMeta : keeperContainerDetailInfo.getKeeperInstances()) {
-            instanceManager.getOrCreate(keeperMeta);
-        }
-        for (RedisMeta redisMeta : keeperContainerDetailInfo.getRedisInstances()) {
-            instanceManager.getOrCreateRedisInstanceForAssignedAction(redisMeta);
         }
     }
 
@@ -166,6 +153,14 @@ public class DefaultHealthChecker extends AbstractLifecycle implements HealthChe
             }
         }
         instanceManager.getOrCreate(clusterMeta);
+    }
+
+    void generatePsubPingActionHealthCheckInstances(ClusterMeta clusterMeta){
+        for(ShardMeta shard : clusterMeta.getShards().values()) {
+            for(RedisMeta redis : shard.getRedises()) {
+                instanceManager.getOrCreateRedisInstanceForPsubPingAction(redis);
+            }
+        }
     }
 
 
@@ -183,7 +178,6 @@ public class DefaultHealthChecker extends AbstractLifecycle implements HealthChe
 
         return false;
     }
-
 
     private boolean clusterDcIsCurrentDc(ClusterMeta clusterMeta) {
         return clusterMeta.parent().getId().equalsIgnoreCase(currentDcId);
@@ -204,6 +198,10 @@ public class DefaultHealthChecker extends AbstractLifecycle implements HealthChe
 
     private boolean hasMultipleActiveDcs(ClusterType clusterType) {
         return clusterType.supportMultiActiveDC() && !clusterType.isCrossDc();
+    }
+
+    private boolean isClusterActiveDcCrossRegion(ClusterMeta clusterMeta) {
+        return metaCache.isCrossRegion(currentDcId, clusterMeta.getActiveDc());
     }
 
 }

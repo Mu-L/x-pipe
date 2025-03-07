@@ -2,13 +2,11 @@ package com.ctrip.xpipe.redis.checker.healthcheck.meta;
 
 import com.ctrip.xpipe.api.factory.ObjectFactory;
 import com.ctrip.xpipe.concurrent.AbstractExceptionLogTask;
-import com.ctrip.xpipe.redis.checker.CheckerConsoleService;
 import com.ctrip.xpipe.redis.checker.config.CheckerConfig;
 import com.ctrip.xpipe.redis.checker.healthcheck.HealthCheckInstanceManager;
 import com.ctrip.xpipe.redis.checker.healthcheck.impl.HealthCheckEndpointFactory;
 import com.ctrip.xpipe.redis.core.entity.DcMeta;
 import com.ctrip.xpipe.redis.core.entity.XpipeMeta;
-import com.ctrip.xpipe.redis.core.meta.CurrentDcAllMeta;
 import com.ctrip.xpipe.redis.core.meta.MetaCache;
 import com.ctrip.xpipe.spring.AbstractSpringConfigContext;
 import com.ctrip.xpipe.utils.MapUtils;
@@ -50,12 +48,6 @@ public class DefaultMetaChangeManager implements MetaChangeManager {
     @Autowired
     private MetaCache metaCache;
 
-    @Resource
-    private CurrentDcAllMeta currentDcAllMeta;
-
-    @Autowired
-    private CheckerConsoleService checkerConsoleService;
-
     private ScheduledFuture future;
 
     private ConcurrentMap<String, DcMetaChangeManager> dcMetaChangeManagers = Maps.newConcurrentMap();
@@ -68,6 +60,7 @@ public class DefaultMetaChangeManager implements MetaChangeManager {
             @Override
             protected void doRun() throws Exception {
                 checkDcMetaChange();
+                instanceManager.checkInstancesMiss(metaCache.getXpipeMeta());
             }
         }, interval * 2, interval, TimeUnit.MILLISECONDS);
     }
@@ -87,7 +80,7 @@ public class DefaultMetaChangeManager implements MetaChangeManager {
                 ignore(dcId);
                 continue;
             }
-            getOrCreate(dcId).compare(entry.getValue(), currentDcAllMeta.getCurrentDcAllMeta());
+            getOrCreate(dcId).compare(entry.getValue());
         }
     }
 
@@ -96,8 +89,7 @@ public class DefaultMetaChangeManager implements MetaChangeManager {
         return MapUtils.getOrCreate(dcMetaChangeManagers, dcId, new ObjectFactory<DcMetaChangeManager>() {
                     @Override
                     public DcMetaChangeManager create() {
-                        return new DefaultDcMetaChangeManager(dcId, instanceManager, healthCheckEndpointFactory,
-                                checkerConsoleService, checkerConfig);
+                        return new DefaultDcMetaChangeManager(dcId, instanceManager, healthCheckEndpointFactory, metaCache);
                     }
                 });
     }
@@ -124,7 +116,7 @@ public class DefaultMetaChangeManager implements MetaChangeManager {
         }
         try {
             DcMetaChangeManager manager = getOrCreate(dcId);
-            manager.compare(metaCache.getXpipeMeta().findDc(dcId), currentDcAllMeta.getCurrentDcAllMeta());
+            manager.compare(metaCache.getXpipeMeta().findDc(dcId));
             manager.start();
         } catch (Exception e) {
             logger.error("[start]", e);

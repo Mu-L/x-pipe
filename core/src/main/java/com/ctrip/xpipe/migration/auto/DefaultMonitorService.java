@@ -4,6 +4,7 @@ import com.ctrip.xpipe.api.migration.auto.MonitorService;
 import com.ctrip.xpipe.api.migration.auto.data.MonitorGroupMeta;
 
 import java.util.Collections;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -43,6 +44,11 @@ public class DefaultMonitorService implements MonitorService {
     }
 
     @Override
+    public void updateHost(String host) {
+        // do nothing
+    }
+
+    @Override
     public Set<String> fetchAllClusters(String system) {
         return Collections.emptySet();
     }
@@ -53,8 +59,23 @@ public class DefaultMonitorService implements MonitorService {
     }
 
     @Override
+    public void updateCluster(String system, String clusterName, Set<MonitorGroupMeta> groups) {
+
+    }
+
+    @Override
     public void unregisterCluster(String system, String clusterName) {
         // do nothing
+    }
+
+    @Override
+    public int getBeaconClusterHash(String system, String clusterName) {
+        return 0;
+    }
+
+    @Override
+    public Map<String, Set<String>> getAllClusterWithDc(String system) {
+        return Collections.emptyMap();
     }
 
 }

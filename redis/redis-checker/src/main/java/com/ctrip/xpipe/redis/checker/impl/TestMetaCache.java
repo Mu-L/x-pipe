@@ -2,12 +2,12 @@ package com.ctrip.xpipe.redis.checker.impl;
 
 import com.ctrip.xpipe.cluster.ClusterType;
 import com.ctrip.xpipe.endpoint.HostPort;
-import com.ctrip.xpipe.redis.core.entity.RedisMeta;
-import com.ctrip.xpipe.redis.core.entity.RouteMeta;
-import com.ctrip.xpipe.redis.core.entity.XpipeMeta;
+import com.ctrip.xpipe.redis.core.entity.*;
 import com.ctrip.xpipe.redis.core.exception.MasterNotFoundException;
 import com.ctrip.xpipe.redis.core.meta.MetaCache;
+import com.ctrip.xpipe.redis.core.meta.XpipeMetaManager;
 import com.ctrip.xpipe.tuple.Pair;
+import org.unidal.tuple.Triple;
 
 import java.util.Collections;
 import java.util.List;
@@ -26,14 +26,28 @@ public class TestMetaCache implements MetaCache {
     public TestMetaCache(){
     }
 
+    public void setXpipeMeta(XpipeMeta xpipeMeta) {
+        this.xpipeMeta = xpipeMeta;
+    }
+
     @Override
     public XpipeMeta getXpipeMeta() {
         return xpipeMeta;
     }
 
     @Override
+    public XpipeMeta getXpipeMetaLongPull(long version) throws InterruptedException {
+        return null;
+    }
+
+    @Override
     public XpipeMeta getDividedXpipeMeta(int partIndex) {
         return xpipeMeta;
+    }
+
+    @Override
+    public XpipeMetaManager.MetaDesc findMetaDesc(HostPort hostPort) {
+        return null;
     }
 
     @Override
@@ -102,22 +116,22 @@ public class TestMetaCache implements MetaCache {
     }
 
     @Override
-    public Pair<String, String> findClusterShardBySentinelMonitor(String monitor) {
+    public Triple<String, String, Long> findClusterShardBySentinelMonitor(String monitor) {
         return null;
     }
 
     @Override
-    public List<RouteMeta> getRoutes() {
+    public List<RouteMeta> getCurrentDcConsoleRoutes() {
         return null;
     }
 
     @Override
-    public Map<String, RouteMeta> chooseDefaultRoutes(String clusterName, String srcDc, List<String> dstDcs, int orgId) {
+    public Map<String, RouteMeta> chooseDefaultMetaRoutes(String clusterName, String srcDc, List<String> dstDcs) {
         return null;
     }
 
     @Override
-    public Map<String, RouteMeta> chooseRoutes(String clusterName, String backUpDcName, List<String> peerDcs, int orgId) {
+    public Map<String, RouteMeta> chooseClusterMetaRoutes(String clusterName, String backUpDcName, List<String> peerDcs) {
         return null;
     }
 
@@ -131,7 +145,12 @@ public class TestMetaCache implements MetaCache {
         return null;
     }
 
-    public String getActiveDc(String clusterId, String shardId){return null;}
+    public String getActiveDc(String clusterId){return null;}
+
+    @Override
+    public boolean isDcInRegion(String dc, String zone) {
+        return true;
+    }
 
     @Override
     public String getActiveDc(HostPort hostPort) {
@@ -146,6 +165,11 @@ public class TestMetaCache implements MetaCache {
     @Override
     public long getLastUpdateTime() {
         return 0;
+    }
+
+    @Override
+    public long getVersion() {
+        return xpipeMeta.getVersion();
     }
 
     @Override
@@ -169,6 +193,11 @@ public class TestMetaCache implements MetaCache {
     }
 
     @Override
+    public List<KeeperMeta> getKeeperOfDcClusterShard(String dc, String cluster, String shard) {
+        return null;
+    }
+
+    @Override
     public List<RedisMeta> getSlavesOfShard(String cluster, String shard) {
         return null;
     }
@@ -184,7 +213,23 @@ public class TestMetaCache implements MetaCache {
     }
 
     @Override
+    public List<RedisMeta> getAllInstanceOfDc(String cluster, String dc) {
+        return null;
+    }
+
+    @Override
     public boolean isAsymmetricCluster(String clusterName) {
         return false;
     }
+
+    @Override
+    public Set<String> getAllShardNamesByClusterName(String clusterName) {
+        return Collections.emptySet();
+    }
+
+    @Override
+    public Map<String, Integer> getClusterCntMap(String clusterName) {
+        return Collections.emptyMap();
+    }
+
 }

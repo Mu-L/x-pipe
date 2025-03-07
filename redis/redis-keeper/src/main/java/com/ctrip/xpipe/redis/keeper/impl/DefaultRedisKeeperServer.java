@@ -17,6 +17,7 @@ import com.ctrip.xpipe.concurrent.AbstractExceptionLogTask;
 import com.ctrip.xpipe.concurrent.LongTimeAlertTask;
 import com.ctrip.xpipe.endpoint.DefaultEndPoint;
 import com.ctrip.xpipe.exception.XpipeRuntimeException;
+import com.ctrip.xpipe.gtid.GtidSet;
 import com.ctrip.xpipe.lifecycle.LifecycleHelper;
 import com.ctrip.xpipe.netty.NettySimpleMessageHandler;
 import com.ctrip.xpipe.observer.NodeAdded;
@@ -25,19 +26,24 @@ import com.ctrip.xpipe.redis.core.entity.KeeperInstanceMeta;
 import com.ctrip.xpipe.redis.core.entity.KeeperMeta;
 import com.ctrip.xpipe.redis.core.meta.KeeperState;
 import com.ctrip.xpipe.redis.core.meta.MetaZkConfig;
+import com.ctrip.xpipe.redis.core.protocal.CAPA;
 import com.ctrip.xpipe.redis.core.protocal.PsyncObserver;
 import com.ctrip.xpipe.redis.core.protocal.RedisProtocol;
 import com.ctrip.xpipe.redis.core.protocal.protocal.EofType;
 import com.ctrip.xpipe.redis.core.redis.operation.RedisOpParser;
+import com.ctrip.xpipe.redis.core.redis.rdb.RdbConstant;
 import com.ctrip.xpipe.redis.core.store.*;
 import com.ctrip.xpipe.redis.keeper.*;
 import com.ctrip.xpipe.redis.keeper.config.KeeperConfig;
+import com.ctrip.xpipe.redis.keeper.config.KeeperReplDelayConfig;
 import com.ctrip.xpipe.redis.keeper.config.KeeperResourceManager;
+import com.ctrip.xpipe.redis.keeper.config.ReplDelayConfigCache;
 import com.ctrip.xpipe.redis.keeper.exception.RedisSlavePromotionException;
 import com.ctrip.xpipe.redis.keeper.handler.CommandHandlerManager;
 import com.ctrip.xpipe.redis.keeper.monitor.KeeperMonitor;
 import com.ctrip.xpipe.redis.keeper.monitor.KeepersMonitorManager;
 import com.ctrip.xpipe.redis.keeper.netty.NettyMasterHandler;
+import com.ctrip.xpipe.redis.keeper.ratelimit.SyncRateManager;
 import com.ctrip.xpipe.redis.keeper.store.DefaultFullSyncListener;
 import com.ctrip.xpipe.redis.keeper.store.DefaultReplicationStoreManager;
 import com.ctrip.xpipe.redis.keeper.util.KeeperReplIdAwareThreadFactory;
@@ -55,19 +61,16 @@ import io.netty.util.internal.ConcurrentSet;
 
 import java.io.File;
 import java.io.IOException;
-import java.sql.Time;
-import java.util.Date;
-import java.util.HashSet;
-import java.util.Map;
+import java.util.*;
 import java.util.Map.Entry;
-import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
-import static com.ctrip.xpipe.redis.core.store.FULLSYNC_FAIL_CAUSE.RDB_GTIDSET_NOT_READY;
+import static com.ctrip.xpipe.redis.core.store.FULLSYNC_FAIL_CAUSE.FULLSYNC_PROGRESS_NOT_SUPPORTED;
 import static com.ctrip.xpipe.redis.keeper.SLAVE_STATE.*;
 
 /**
@@ -83,6 +86,7 @@ public class DefaultRedisKeeperServer extends AbstractRedisServer implements Red
 	// otherwise we hardly finish all old replication work before new replication start on master address changing
 	private static final int DEFAULT_MASTER_EVENT_LOOP_SIZE = 1;
 	private static final int DEFAULT_RDB_EVENT_LOOP_SIZE = 1;
+	private static final int DEFAULT_MASTER_CONFIG_EVENT_LOOP_SIZE = 1;
 
 	public static String KEY_DEFAULT_KEEPER_WORKER_GROUP_THREAD_COUNT = "DEFAULT_KEEPER_WORKER_GROUP_THREAD_COUNT";
 	public static int DEFAULT_KEEPER_WORKER_GROUP_THREAD_COUNT = Integer.parseInt(System.getProperty(KEY_DEFAULT_KEEPER_WORKER_GROUP_THREAD_COUNT, "5"));
@@ -99,6 +103,8 @@ public class DefaultRedisKeeperServer extends AbstractRedisServer implements Red
 	private AtomicBoolean crossRegion;
 	
 	private long keeperStartTime;
+
+	private SyncRateManager syncRateManager;
 	
 	@VisibleForTesting ReplicationStoreManager replicationStoreManager;
 
@@ -108,6 +114,7 @@ public class DefaultRedisKeeperServer extends AbstractRedisServer implements Red
     private EventLoopGroup workerGroup;
     private NioEventLoopGroup masterEventLoopGroup;
 	private NioEventLoopGroup rdbOnlyEventLoopGroup;
+	private NioEventLoopGroup masterConfigEventLoopGroup;
 
 	private final Map<Channel, RedisClient<RedisKeeperServer>>  redisClients = new ConcurrentHashMap<>();
 
@@ -143,6 +150,10 @@ public class DefaultRedisKeeperServer extends AbstractRedisServer implements Red
 
 	private volatile AtomicReference<RdbDumper> rdbDumper = new AtomicReference<RdbDumper>(null);
 	private long lastDumpTime = -1;
+
+	private AtomicLong lastRdbDumpTime = new AtomicLong(-1);
+	private AtomicLong lastRordbDumpTime = new AtomicLong(-1);
+
 	//for test
 	private AtomicInteger  rdbDumpTryCount = new AtomicInteger();
 	
@@ -153,16 +164,20 @@ public class DefaultRedisKeeperServer extends AbstractRedisServer implements Red
 
 	private RedisOpParser redisOpParser;
 
+	private ReplDelayConfigCache replDelayConfigCache;
+
 	public DefaultRedisKeeperServer(Long replId, KeeperMeta currentKeeperMeta, KeeperConfig keeperConfig, File baseDir,
 									LeaderElectorManager leaderElectorManager,
-									KeepersMonitorManager keepersMonitorManager, KeeperResourceManager resourceManager){
+									KeepersMonitorManager keepersMonitorManager,
+									KeeperResourceManager resourceManager, SyncRateManager syncRateManager){
 
-		this(replId, currentKeeperMeta, keeperConfig, baseDir, leaderElectorManager, keepersMonitorManager, resourceManager, null);
+		this(replId, currentKeeperMeta, keeperConfig, baseDir, leaderElectorManager, keepersMonitorManager, resourceManager, syncRateManager, null, null);
 	}
 
 	public DefaultRedisKeeperServer(Long replId, KeeperMeta currentKeeperMeta, KeeperConfig keeperConfig, File baseDir,
 									LeaderElectorManager leaderElectorManager,
-									KeepersMonitorManager keepersMonitorManager, KeeperResourceManager resourceManager, RedisOpParser redisOpParser){
+									KeepersMonitorManager keepersMonitorManager, KeeperResourceManager resourceManager,
+									SyncRateManager syncRateManager, RedisOpParser redisOpParser, ReplDelayConfigCache replDelayConfigCache){
 
 		this.clusterId = ClusterId.from(((ClusterMeta) currentKeeperMeta.parent().parent()).getDbId());
 		this.shardId = ShardId.from(currentKeeperMeta.parent().getDbId());
@@ -176,12 +191,14 @@ public class DefaultRedisKeeperServer extends AbstractRedisServer implements Red
 		this.resourceManager = resourceManager;
 		this.redisOpParser = redisOpParser;
 		this.crossRegion = new AtomicBoolean(false);
+		this.syncRateManager = syncRateManager;
+		this.replDelayConfigCache = replDelayConfigCache;
 	}
 
 	protected ReplicationStoreManager createReplicationStoreManager(KeeperConfig keeperConfig, ClusterId clusterId, ShardId shardId, ReplId replId,
 																	KeeperMeta currentKeeperMeta, File baseDir, KeeperMonitor keeperMonitor) {
 		return new DefaultReplicationStoreManager.ClusterAndShardCompatible(keeperConfig, replId, currentKeeperMeta.getId(),
-				baseDir, keeperMonitor, redisOpParser).setDeprecatedClusterAndShard(clusterId, shardId);
+				baseDir, keeperMonitor, redisOpParser, syncRateManager).setDeprecatedClusterAndShard(clusterId, shardId);
 	}
 
 	private LeaderElector createLeaderElector(){
@@ -214,6 +231,11 @@ public class DefaultRedisKeeperServer extends AbstractRedisServer implements Red
 	}
 
 	@Override
+	public void releaseRdb() throws IOException {
+		getCurrentReplicationStore().releaseRdb();
+	}
+
+	@Override
 	protected void doInitialize() throws Exception {
 		super.doInitialize();
 
@@ -231,6 +253,7 @@ public class DefaultRedisKeeperServer extends AbstractRedisServer implements Red
 		workerGroup = new NioEventLoopGroup(DEFAULT_KEEPER_WORKER_GROUP_THREAD_COUNT, KeeperReplIdAwareThreadFactory.create(replId, "work-"+ threadPoolName));
 		masterEventLoopGroup = new NioEventLoopGroup(DEFAULT_MASTER_EVENT_LOOP_SIZE, KeeperReplIdAwareThreadFactory.create(replId, "master-" + threadPoolName));
 		rdbOnlyEventLoopGroup = new NioEventLoopGroup(DEFAULT_RDB_EVENT_LOOP_SIZE, KeeperReplIdAwareThreadFactory.create(replId, "rdbOnly-" + threadPoolName));
+		masterConfigEventLoopGroup = new NioEventLoopGroup(DEFAULT_MASTER_CONFIG_EVENT_LOOP_SIZE, KeeperReplIdAwareThreadFactory.create(replId, "masterConfig-" + threadPoolName));
 
 
 		this.resetReplAfterLongTimeDown();
@@ -448,7 +471,7 @@ public class DefaultRedisKeeperServer extends AbstractRedisServer implements Red
 	private void initAndStartMaster(Endpoint target) {
 		try {
 			this.keeperRedisMaster = new DefaultRedisMaster(this, (DefaultEndPoint)target, masterEventLoopGroup,
-					rdbOnlyEventLoopGroup, replicationStoreManager, scheduled, resourceManager);
+					rdbOnlyEventLoopGroup, masterConfigEventLoopGroup, replicationStoreManager, scheduled, resourceManager);
 
 			if(getLifecycleState().isStopping() || getLifecycleState().isStopped()){
 				logger.info("[initAndStartMaster][stopped, exit]{}, {}", target, this);
@@ -489,8 +512,9 @@ public class DefaultRedisKeeperServer extends AbstractRedisServer implements Red
 
 	@Override
 	public RedisClient<RedisKeeperServer> clientConnected(Channel channel) {
-		
-		RedisClient<RedisKeeperServer> redisClient = new DefaultRedisClient(channel, this);
+
+		DefaultRedisClient redisClient = new DefaultRedisClient(channel, this);
+		redisClient.setReplDelayConfigCache(replDelayConfigCache);
 		redisClients.put(channel, redisClient);
 		
 		redisClient.addObserver(new Observer() {
@@ -635,7 +659,8 @@ public class DefaultRedisKeeperServer extends AbstractRedisServer implements Red
 	}
 
 	@Override
-	public void readRdbGtidSet(RdbStore rdbStore, String gtidSet) {
+	public void readAuxEnd(RdbStore rdbStore, Map<String, String> auxMap) {
+		String gtidSet = auxMap.getOrDefault(RdbConstant.REDIS_RDB_AUX_KEY_GTID, GtidSet.EMPTY_GTIDSET);
 		try {
 			if (isStartIndexing) {
 				EventMonitor.DEFAULT.logEvent("INDEX.START", replId + " - " + gtidSet);
@@ -644,11 +669,6 @@ public class DefaultRedisKeeperServer extends AbstractRedisServer implements Red
 		} catch (Throwable t) {
 			EventMonitor.DEFAULT.logAlertEvent("INDEX.START.FAIL: " + replId + " - " + gtidSet);
 		}
-	}
-
-	@Override
-	public void readAuxEnd(RdbStore rdbStore) {
-		/*NOOP*/
 	}
 
 	@Override
@@ -750,34 +770,52 @@ public class DefaultRedisKeeperServer extends AbstractRedisServer implements Red
 	}
 	
 	@Override
-	public void fullSyncToSlave(final RedisSlave redisSlave) throws IOException {
+	public void fullSyncToSlave(final RedisSlave redisSlave, boolean freshRdbNeeded) throws IOException {
 		
 		logger.info("[fullSyncToSlave]{}, {}", redisSlave, rdbDumper.get());
 
-		if (crossRegion.get() && !tryFullSyncToSlaveWithOthers(redisSlave)) {
+		if (crossRegion.get() && !redisSlave.isKeeper() && !tryFullSyncToSlaveWithOthers(redisSlave)) {
 			redisSlave.waitForSeqFsync();
 			return;
 		}
 
+		boolean tryRordb = false; // slave and master all support rordb or not
+		if (redisSlave.capaOf(CAPA.RORDB)) {
+			try {
+				logger.info("[fullSyncToSlave][rordb]{}", redisSlave);
+				tryRordb = keeperRedisMaster.checkMasterSupportRordb().get();
+				logger.info("[fullSyncToSlave][rordb] masterSupport:{}", tryRordb);
+			} catch (Throwable th) {
+				logger.info("[fullSyncToSlave][rordb]{}", redisSlave, th);
+			}
+		}
+
 		if(rdbDumper.get() == null){
 			logger.info("[fullSyncToSlave][dumper null]{}", redisSlave);
-			FullSyncListener fullSyncListener = new DefaultFullSyncListener(redisSlave);
-			FULLSYNC_FAIL_CAUSE failCause = getCurrentReplicationStore().fullSyncIfPossible(fullSyncListener);
-			if(null != failCause){
-				//go dump rdb
-				try{
-					if (RDB_GTIDSET_NOT_READY.equals(failCause)) {
-						redisSlave.waitForGtidParse();
-					} else {
-						dumpNewRdb();
-						redisSlave.waitForRdbDumping();
-					}
-				}catch(AbstractRdbDumperException e){
-					logger.error("[fullSyncToSlave]", e);
-					if(e.isCancelSlave()){
-						logger.info("[fullSyncToSlave][cancel slave]");	
-						redisSlave.close();
-					}
+			if (!freshRdbNeeded) {
+				FullSyncListener fullSyncListener = new DefaultFullSyncListener(redisSlave);
+				FULLSYNC_FAIL_CAUSE failCause = getCurrentReplicationStore().fullSyncIfPossible(fullSyncListener, tryRordb);
+				if (null == failCause) {
+					return;
+				} else if (FULLSYNC_PROGRESS_NOT_SUPPORTED.equals(failCause)) {
+					logger.info("[fullSyncToSlave][progress not support][cancel slave]");
+					redisSlave.close();
+					return;
+				}
+			}
+
+			try{
+				RdbDumper newDumper = dumpNewRdb(tryRordb, freshRdbNeeded);
+				redisSlave.waitForRdbDumping();
+				if (newDumper.future().isDone() && !newDumper.future().isSuccess()) {
+					logger.info("[fullSyncToSlave][new dumper fail immediatelly]");
+					redisSlave.close();
+				}
+			}catch(AbstractRdbDumperException e){
+				logger.error("[fullSyncToSlave]", e);
+				if(e.isCancelSlave()){
+					logger.info("[fullSyncToSlave][cancel slave]");
+					redisSlave.close();
 				}
 			}
 		}else{
@@ -786,7 +824,6 @@ public class DefaultRedisKeeperServer extends AbstractRedisServer implements Red
 	}
 
 	private synchronized boolean tryFullSyncToSlaveWithOthers(RedisSlave redisSlave) {
-		if (redisSlave.isKeeper()) return true;
 		if (loadingSlaves.contains(redisSlave)) return true;
 
 		int maxConcurrentLoadingSlaves = keeperConfig.getCrossRegionMaxLoadingSlavesCnt();
@@ -829,7 +866,7 @@ public class DefaultRedisKeeperServer extends AbstractRedisServer implements Red
 
 			if (failCause != null) {
 				try {
-					dumpNewRdb();
+					dumpNewRdb(false);
 				} catch (Throwable t) {
 					logger.error("[startIndexing][dumpNewRdb] fail {}, {}", this, rdbDumper.get());
 					logger.error("[startIndexing][dumpNewRdb] fail", t);
@@ -843,9 +880,13 @@ public class DefaultRedisKeeperServer extends AbstractRedisServer implements Red
 	    return isStartIndexing;
 	}
 
-	private RdbDumper dumpNewRdb() throws CreateRdbDumperException, SetRdbDumperException {
+	private RdbDumper dumpNewRdb(boolean tryRordb) throws CreateRdbDumperException, SetRdbDumperException {
+		return dumpNewRdb(tryRordb, false);
+	}
+
+	private RdbDumper dumpNewRdb(boolean tryRordb, boolean freshRdbNeeded) throws CreateRdbDumperException, SetRdbDumperException {
 		
-		RdbDumper rdbDumper = keeperRedisMaster.createRdbDumper();
+		RdbDumper rdbDumper = keeperRedisMaster.createRdbDumper(tryRordb, freshRdbNeeded);
 		setRdbDumper(rdbDumper);
 		rdbDumper.execute();
 		return rdbDumper;
@@ -881,14 +922,15 @@ public class DefaultRedisKeeperServer extends AbstractRedisServer implements Red
 		
 		logger.info("[setRdbDumper]{},{}", newDumper, force);
 		rdbDumpTryCount.incrementAndGet();
+		AtomicLong lastDumpTime = newDumper.tryRordb() ? lastRordbDumpTime : lastRdbDumpTime;
 		
-		if(lastDumpTime > 0 && !force && (System.currentTimeMillis() - lastDumpTime < keeperConfig.getRdbDumpMinIntervalMilli())){
-			logger.info("[setRdbDumper][too quick]{}", new Date(lastDumpTime));
-			throw new SetRdbDumperException(lastDumpTime, keeperConfig.getRdbDumpMinIntervalMilli());
+		if(lastDumpTime.get() > 0 && !force && (System.currentTimeMillis() - lastDumpTime.get() < keeperConfig.getRdbDumpMinIntervalMilli())){
+			logger.info("[setRdbDumper][too quick]{}", new Date(lastDumpTime.get()));
+			throw new SetRdbDumperException(lastDumpTime.get(), keeperConfig.getRdbDumpMinIntervalMilli());
 		}
 		
 		if(rdbDumper.compareAndSet(null, newDumper)){
-			lastDumpTime = System.currentTimeMillis();
+			lastDumpTime.set(System.currentTimeMillis());
 			dumpListener(newDumper);
 			return;
 		}
@@ -902,7 +944,7 @@ public class DefaultRedisKeeperServer extends AbstractRedisServer implements Red
 				logger.error("[setRdbDumper][error cancel]" + olRdbDumper, e);
 			}
 			rdbDumper.set(newDumper);
-			lastDumpTime = System.currentTimeMillis();
+			lastDumpTime.set(System.currentTimeMillis());
 			dumpListener(newDumper);
 		}else{
 			throw new SetRdbDumperException(olRdbDumper);
@@ -921,18 +963,51 @@ public class DefaultRedisKeeperServer extends AbstractRedisServer implements Red
 				
 				if(!commandFuture.isSuccess()){
 					logger.info("[operationComplete][dump fail, clear dump time]", commandFuture.cause());
-					lastDumpTime = 0;
+					AtomicLong lastDumpTime = newDumper.tryRordb() ? lastRordbDumpTime : lastRdbDumpTime;
+					lastDumpTime.set(0);
 				}
 			}
 		});
 	}
 
 	@Override
-	public void clearRdbDumper(RdbDumper oldDumper) {
+	public void clearRdbDumper(RdbDumper oldDumper, boolean forceRdb) {
 		
 		logger.info("[clearRdbDumper]{}", oldDumper);
 		if(!rdbDumper.compareAndSet(oldDumper, null)){
 			logger.warn("[clearRdbDumper][current is not request]{}, {}", oldDumper, rdbDumper.get());
+		} else {
+			logger.debug("[clearRdbDumper] redump for waiting slaves if needed");
+			List<RedisSlave> waitingSlaves = new ArrayList<>();
+			int needRordbSlaves = 0;
+			for (final RedisSlave redisSlave : slaves()) {
+				if (redisSlave.getSlaveState() == SLAVE_STATE.REDIS_REPL_WAIT_RDB_DUMPING) {
+					waitingSlaves.add(redisSlave);
+					if (redisSlave.capaOf(CAPA.RORDB)) needRordbSlaves++;
+				}
+			}
+
+			if (!waitingSlaves.isEmpty()) {
+				try {
+					logger.info("[clearRdbDumper][redump][rdb] waiting:{}, needRordb:{}, forceRdb:{}", waitingSlaves.size(), needRordbSlaves, forceRdb);
+					if (forceRdb) {
+						dumpNewRdb(false);
+					} else {
+						// use RORDB only if all slaves accept it
+						dumpNewRdb(waitingSlaves.size() == needRordbSlaves);
+					}
+				} catch (Throwable th) {
+					logger.info("[clearRdbDumper][redump] fail", th);
+					waitingSlaves.forEach(redisSlave -> {
+						try {
+							logger.info("[redumpFailed][close]{}", redisSlave);
+							redisSlave.close();
+						} catch (Throwable t) {
+							logger.error("[redumpFailed][close slave]", t);
+						}
+					});
+				}
+			}
 		}
 	}
 	
@@ -1024,13 +1099,8 @@ public class DefaultRedisKeeperServer extends AbstractRedisServer implements Red
 			}
 
 			@Override
-			public void readRdbGtidSet(RdbStore rdbStore, String gtidSet) {
-				redisKeeperServer.readRdbGtidSet(rdbStore, gtidSet);
-			}
-
-			@Override
-			public void readAuxEnd(RdbStore rdbStore) {
-
+			public void readAuxEnd(RdbStore rdbStore, Map<String, String> auxMap) {
+				redisKeeperServer.readAuxEnd(rdbStore, auxMap);
 			}
 
 			@Override

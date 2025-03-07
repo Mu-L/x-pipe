@@ -1,25 +1,37 @@
 package com.ctrip.xpipe.redis.console.controller.api.migrate;
 
 import com.ctrip.xpipe.api.migration.DcMapper;
+import com.ctrip.xpipe.cluster.ClusterType;
 import com.ctrip.xpipe.redis.checker.controller.result.RetMessage;
+import com.ctrip.xpipe.redis.console.cache.DcCache;
 import com.ctrip.xpipe.redis.console.controller.AbstractConsoleController;
 import com.ctrip.xpipe.redis.console.controller.api.migrate.meta.*;
+import com.ctrip.xpipe.redis.console.entity.ClusterEntity;
+import com.ctrip.xpipe.redis.console.entity.MigrationBiClusterEntity;
 import com.ctrip.xpipe.redis.console.migration.model.MigrationCluster;
 import com.ctrip.xpipe.redis.console.migration.model.MigrationEvent;
 import com.ctrip.xpipe.redis.console.migration.status.MigrationStatus;
+import com.ctrip.xpipe.redis.console.model.MigrationClusterTbl;
+import com.ctrip.xpipe.redis.console.repository.ClusterRepository;
+import com.ctrip.xpipe.redis.console.repository.MigrationBiClusterRepository;
 import com.ctrip.xpipe.redis.console.service.migration.MigrationService;
 import com.ctrip.xpipe.redis.console.service.migration.exception.*;
 import com.ctrip.xpipe.redis.console.service.migration.impl.MigrationRequest;
 import com.ctrip.xpipe.redis.console.service.migration.impl.TryMigrateResult;
+import com.ctrip.xpipe.redis.core.entity.ClusterMeta;
+import com.ctrip.xpipe.redis.core.entity.DcMeta;
+import com.ctrip.xpipe.redis.core.entity.XpipeMeta;
+import com.ctrip.xpipe.redis.core.meta.MetaCache;
+import com.ctrip.xpipe.utils.StringUtil;
 import com.ctrip.xpipe.utils.VisibleForTesting;
 import org.apache.commons.lang3.RandomUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 /**
  * @author wenchao.meng
@@ -34,6 +46,18 @@ public class MigrationApi extends AbstractConsoleController {
 
     @Autowired
     private MigrationService migrationService;
+
+    @Autowired
+    private MigrationBiClusterRepository biMigrationRepository;
+
+    @Autowired
+    private ClusterRepository clusterRepository;
+
+    @Autowired
+    private MetaCache metaCache;
+
+    @Autowired
+    private DcCache dcCache;
 
     @RequestMapping(value = "/checkandprepare", method = RequestMethod.POST, produces = {MediaType.APPLICATION_JSON_UTF8_VALUE})
     public CheckPrepareResponse checkAndPrepare(@RequestBody(required = true) CheckPrepareRequest checkMeta) {
@@ -181,6 +205,91 @@ public class MigrationApi extends AbstractConsoleController {
         return rollbackResponse;
     }
 
+    @GetMapping(value = "history")
+    public Map<String, List<ClusterMigrationStatus>> getClusterMigrationHistory(@RequestBody MigrationHistoryReq req) {
+        logger.info("[history][{}-{}] {}", req.from, req.to, req.clusters);
+        long current = TimeUnit.MILLISECONDS.toSeconds(System.currentTimeMillis());
+        if (req.from < 0 || req.from >= current) return Collections.emptyMap();
+        if (null == req.clusters || req.clusters.isEmpty()) return Collections.emptyMap();
+        if (req.to < req.from) req.to = current;
+
+        List<MigrationClusterTbl> migrationClusterTbls = migrationService.fetchMigrationClusters(req.clusters,
+                TimeUnit.SECONDS.toMillis(req.from), TimeUnit.SECONDS.toMillis(req.to));
+        Map<String, List<ClusterMigrationStatus>> resp = new HashMap<>();
+        migrationClusterTbls.forEach(migrationClusterTbl -> {
+            String clusterName = migrationClusterTbl.getCluster().getClusterName();
+            if (!resp.containsKey(clusterName)) resp.put(clusterName, new ArrayList<>());
+            ClusterMigrationStatus clusterMigrationStatus = ClusterMigrationStatus.from(migrationClusterTbl, dcCache);
+            resp.get(clusterName).add(clusterMigrationStatus);
+        });
+
+        return resp;
+    }
+
+    @GetMapping(value = "/v2/history")
+    public Map<String, List<ClusterMigrationStatusV2>> getClusterMigrationHistoryV2(@RequestBody MigrationHistoryReq req) {
+        logger.info("[historyV2][{}-{}] {}", req.from, req.to, req.clusters);
+        long current = TimeUnit.MILLISECONDS.toSeconds(System.currentTimeMillis());
+        if (req.from < 0 || req.from >= current) return Collections.emptyMap();
+        if (null == req.clusters || req.clusters.isEmpty()) return Collections.emptyMap();
+        if (req.to < req.from) req.to = current;
+
+        List<ClusterEntity> clusters = clusterRepository.selectAllByClusterName(req.clusters);
+        Map<String, ClusterEntity> oneWayClusters = new HashMap<>();
+        Map<Long, ClusterEntity> biDirectionClusters = new HashMap<>();
+
+        for (ClusterEntity cluster: clusters) {
+            if (ClusterType.isSameClusterType(cluster.getClusterType(), ClusterType.ONE_WAY)) {
+                oneWayClusters.put(cluster.getClusterName(), cluster);
+            } else if (ClusterType.isSameClusterType(cluster.getClusterType(), ClusterType.BI_DIRECTION)) {
+                biDirectionClusters.put(cluster.getId(), cluster);
+            }
+        }
+
+        long from = TimeUnit.SECONDS.toMillis(req.from);
+        long to = TimeUnit.SECONDS.toMillis(req.to);
+        Map<String, List<ClusterMigrationStatusV2>> resp = new HashMap<>();
+
+        if (!oneWayClusters.isEmpty()) {
+            List<MigrationClusterTbl> migrationClusterTbls = migrationService.fetchMigrationClusters(oneWayClusters.keySet(), from, to);
+            for (MigrationClusterTbl migrationClusterTbl: migrationClusterTbls) {
+                String clusterName = migrationClusterTbl.getCluster().getClusterName();
+                ClusterEntity cluster = oneWayClusters.get(clusterName);
+                if (!resp.containsKey(clusterName)) resp.put(clusterName, new ArrayList<>());
+                ClusterMigrationStatusV2 clusterMigrationStatus = ClusterMigrationStatusV2.from(cluster, migrationClusterTbl, dcCache);
+                resp.get(clusterName).add(clusterMigrationStatus);
+            }
+        }
+
+        if (!biDirectionClusters.isEmpty()) {
+            List<MigrationBiClusterEntity> biMigrationRecords = biMigrationRepository.selectAllByClusterIdAndOpTime(biDirectionClusters.keySet(),
+                    new Date(from), new Date(to));
+            for (MigrationBiClusterEntity biMigrationRecord: biMigrationRecords) {
+                Long clusterId = biMigrationRecord.getClusterId();
+                ClusterEntity cluster = biDirectionClusters.get(clusterId);
+                String clusterName = cluster.getClusterName();
+                if (!resp.containsKey(clusterName)) resp.put(clusterName, new ArrayList<>());
+                ClusterMigrationStatusV2 clusterMigrationStatus = ClusterMigrationStatusV2.from(cluster, biMigrationRecord, getBiRelatedDcs(clusterName));
+                resp.get(clusterName).add(clusterMigrationStatus);
+            }
+        }
+
+        return resp;
+    }
+
+    private Set<String> getBiRelatedDcs(String clusterId) {
+        XpipeMeta xpipeMeta = metaCache.getXpipeMeta();
+        for (DcMeta dcMeta: xpipeMeta.getDcs().values()) {
+            if (dcMeta.getClusters().containsKey(clusterId)) {
+                ClusterMeta cluster = dcMeta.getClusters().get(clusterId);
+                String dcs = cluster.getDcs();
+                if (StringUtil.isEmpty(dcs)) return Collections.emptySet();
+                else return new HashSet<>(Arrays.asList(dcs.split("\\s*,\\s*")));
+            }
+        }
+        return Collections.emptySet();
+    }
+
     @RequestMapping(value = "/migration/system/health/status", method = RequestMethod.GET)
     public RetMessage getMigrationSystemHealthStatus() {
         logger.info("[getMigrationSystemHealthStatus]");
@@ -191,12 +300,6 @@ public class MigrationApi extends AbstractConsoleController {
             return RetMessage.createFailMessage(e.getMessage());
         }
     }
-
-    @RequestMapping(value = "/unsupported/clusters", method = RequestMethod.GET)
-    public Set<String> getMigrationUnsupportedClusters() {
-        return migrationService.migrationUnsupportedClusters();
-    }
-
 
     private void mapResponseIdc(List<? extends AbstractClusterMeta> results) {
 

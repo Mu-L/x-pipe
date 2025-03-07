@@ -107,6 +107,7 @@ CREATE TABLE `CLUSTER_TBL` (
   `cluster_admin_emails` varchar(1024) DEFAULT ' ' COMMENT 'persons email who in charge of this cluster',
   `cluster_designated_route_ids` varchar(1024) NOT NULL DEFAULT '' COMMENT 'designated routeIds',
   `create_time` timestamp NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'cluster create time',
+  `tag` varchar(32) NOT NULL DEFAULT '' COMMENT 'special marking',
 
   PRIMARY KEY (`id`),
   UNIQUE KEY `cluster_name` (`cluster_name`),
@@ -231,7 +232,8 @@ CREATE TABLE `KEEPERCONTAINER_TBL` (
   `DataChange_LastTime` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'last modified time',
   `deleted` tinyint(1) NOT NULL DEFAULT '0' COMMENT 'deleted or not',
   `keepercontainer_org_id` bigint(20) unsigned NOT NULL DEFAULT '0' COMMENT 'organization id of keeper container',
-  `keepercontainer_disk_type` varchar(64) not null default 'default'
+  `keepercontainer_disk_type` varchar(64) not null default 'default',
+  `tag` varchar(32) not null default '',
   PRIMARY KEY (`keepercontainer_id`),
   KEY `DataChange_LastTime` (`DataChange_LastTime`),
   KEY `keepercontainer_dc` (`keepercontainer_dc`)
@@ -352,6 +354,7 @@ CREATE TABLE `route_tbl` (
   `route_org_id` bigint(20) unsigned NOT NULL DEFAULT '0' COMMENT 'organization id of route',
   `src_dc_id` bigint(20) unsigned NOT NULL DEFAULT '0' COMMENT 'source dc id',
   `dst_dc_id` bigint(20) unsigned NOT NULL DEFAULT '0' COMMENT 'destination dc id',
+  `cluster_type` varchar(32) NOT NULL DEFAULT '' COMMENT 'cluster type of route',
   `src_proxy_ids` varchar(128) NOT NULL DEFAULT '' COMMENT 'source proxies ids',
   `dst_proxy_ids` varchar(128) NOT NULL DEFAULT '' COMMENT 'destination proxies ids',
   `optional_proxy_ids` varchar(128) NOT NULL DEFAULT '' COMMENT 'optional relay proxies, ids separated by whitespace',
@@ -414,8 +417,10 @@ CREATE TABLE `sentinel_group_tbl`
     `sentinel_group_id`   bigint(20) NOT NULL AUTO_INCREMENT COMMENT '哨兵组id',
     `cluster_type`        varchar(40)  NOT NULL DEFAULT '' COMMENT '该哨兵组适用的集群类型',
     `deleted`             tinyint(4) NOT NULL DEFAULT '0' COMMENT '是否删除',
+    `active`             tinyint(4) NOT NULL DEFAULT '1' COMMENT '是否有效',
     `datachange_lasttime` timestamp(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP (3) COMMENT '更新时间',
     `sentinel_description` varchar(100)  NOT NULL DEFAULT '',
+    `tag`                  varchar(32) not null default '' COMMENT 'special marking',
     PRIMARY KEY (`sentinel_group_id`),
     KEY                   `ix_DataChange_LastTime` (`datachange_lasttime`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='哨兵组表';
@@ -489,3 +494,19 @@ CREATE TABLE `applier_tbl` (
   KEY `active` (`active`),
   KEY `shard_id_deleted` (`shard_id`,`deleted`)
 ) DEFAULT CHARSET=utf8 COMMENT='applier base info';
+
+-- migration_bi_cluster_tbl
+drop table if exists migration_bi_cluster_tbl;
+CREATE TABLE `migration_bi_cluster_tbl` (
+  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT 'primary key',
+  `cluster_id` bigint(20) unsigned NOT NULL DEFAULT '0' COMMENT 'reference bi cluster',
+  `operation_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'migration time',
+  `operator` varchar(128) NOT NULL DEFAULT 'xpipe' COMMENT 'migration operator',
+  `status` varchar(16) NOT NULL DEFAULT 'unknown' COMMENT 'migration status',
+  `publish_info` varchar(10240) NOT NULL DEFAULT '' COMMENT 'migration publish information',
+  `DataChange_LastTime` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'last modified time',
+  `deleted` tinyint(1) NOT NULL DEFAULT '0' COMMENT 'deleted or not',
+  PRIMARY KEY (`id`),
+  KEY `cluster_id` (`cluster_id`),
+  KEY `operator` (`operator`)
+) DEFAULT CHARSET=utf8 COMMENT='bi cluster migration record';

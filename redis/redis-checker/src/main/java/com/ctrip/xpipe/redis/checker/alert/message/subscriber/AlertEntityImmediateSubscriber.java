@@ -1,19 +1,17 @@
 package com.ctrip.xpipe.redis.checker.alert.message.subscriber;
 
 import com.ctrip.xpipe.concurrent.AbstractExceptionLogTask;
-import com.ctrip.xpipe.redis.checker.alert.ALERT_TYPE;
 import com.ctrip.xpipe.redis.checker.alert.AlertEntity;
-import com.ctrip.xpipe.redis.checker.alert.AlertMessageEntity;
 import com.ctrip.xpipe.redis.checker.alert.message.AlertEntityHolderManager;
 import com.ctrip.xpipe.redis.checker.alert.message.holder.DefaultAlertEntityHolderManager;
-import com.ctrip.xpipe.redis.checker.alert.policy.receiver.EmailReceiverModel;
 import com.ctrip.xpipe.utils.DateTimeUtils;
 import com.ctrip.xpipe.utils.VisibleForTesting;
 import com.google.common.collect.Sets;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import javax.annotation.PostConstruct;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -26,6 +24,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 @Component
 public class AlertEntityImmediateSubscriber extends AbstractAlertEntitySubscriber {
+
+    protected static final Logger logger = LoggerFactory.getLogger(AlertEntityImmediateSubscriber.class);
 
     private final static long reportInterval = 3 * 60 * 1000;
 
@@ -42,9 +42,9 @@ public class AlertEntityImmediateSubscriber extends AbstractAlertEntitySubscribe
             protected void doRun() {
                 try {
                     lock.lock();
-                    logger.debug("[initCleaner][before]sent alerts: {}", existingAlerts);
+                    logger.debug("[ImmediateSubscriber][before]sent alerts: {}", existingAlerts);
                     existingAlerts.removeIf(alert -> alertRecovered(alert));
-                    logger.debug("[initCleaner][after]send alerts: {}", existingAlerts);
+                    logger.debug("[ImmediateSubscriber][after]send alerts: {}", existingAlerts);
                 } finally {
                     lock.unlock();
                 }
@@ -55,11 +55,14 @@ public class AlertEntityImmediateSubscriber extends AbstractAlertEntitySubscribe
 
     @Override
     protected void doProcessAlert(AlertEntity alert) {
-        if(hasBeenSentOut(alert)) {
-            logger.debug("[doProcessAlert]Alert has been sent out once: {}", alert);
+        if(alert.getAlertType().delayedSendingTime() > 0 || alert.getAlertType().onlyTrack()) {
             return;
         }
-        logger.debug("[sendTaskBegin] {}", sendTaskBegin.get());
+        if(hasBeenSentOut(alert)) {
+            logger.debug("[ImmediateSubscriber]Alert has been sent out once: {}", alert);
+            return;
+        }
+        logger.debug("[ImmediateSubscriber]sendTaskBegin {}", sendTaskBegin.get());
         sendingAlerts.add(alert);
         if(sendTaskBegin.compareAndSet(false, true)) {
             logger.debug("send alert @{}, alert: {}", DateTimeUtils.currentTimeAsString(), alert);
@@ -79,16 +82,8 @@ public class AlertEntityImmediateSubscriber extends AbstractAlertEntitySubscribe
                 } finally {
                     lock.unlock();
                 }
-                logger.debug("[scheduleSendTask][alerts] {}", holderManager);
-                Map<EmailReceiverModel, Map<ALERT_TYPE, Set<AlertEntity>>> map = alertPolicyManager().queryGroupedEmailReceivers(holderManager);
-
-                for(Map.Entry<EmailReceiverModel, Map<ALERT_TYPE, Set<AlertEntity>>> mailGroup : map.entrySet()) {
-                    if(mailGroup.getValue() == null || mailGroup.getValue().isEmpty()) {
-                        continue;
-                    }
-                    AlertMessageEntity message = getMessage(mailGroup.getKey(), mailGroup.getValue(), true);
-                    emailMessage(message);
-                }
+                logger.debug("[ImmediateSubscriber][alerts] {}", holderManager);
+                doSend(holderManager, true);
                 sendTaskBegin.compareAndSet(true, false);
             }
         }, reportInterval, TimeUnit.MILLISECONDS);
@@ -120,5 +115,10 @@ public class AlertEntityImmediateSubscriber extends AbstractAlertEntitySubscribe
     @VisibleForTesting
     public Set<AlertEntity> getSendingAlerts() {
         return sendingAlerts;
+    }
+
+    @Override
+    public Logger getLogger() {
+        return logger;
     }
 }

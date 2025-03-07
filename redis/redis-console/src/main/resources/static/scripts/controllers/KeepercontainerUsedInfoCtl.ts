@@ -8,7 +8,6 @@ function KeepercontainerUsedInfoCtl($rootScope, $scope, $window, $stateParams, K
 
     $scope.tableParams = new NgTableParams({}, {});
     KeeperContainerService.getAllKeepercontainerUsedInfo().then(function (response) {
-        console.log(response);
         if (Array.isArray(response))  {
             $scope.originData = response;
 
@@ -29,6 +28,9 @@ function KeepercontainerUsedInfoCtl($rootScope, $scope, $window, $stateParams, K
                             row.activeRedisUsedMemoryStandardPercentage = $scope.getActivePercentage(row.activeRedisUsedMemory, row.redisUsedMemoryStandard)*100;
                             row.activeInputFlowPercentage = $scope.getActivePercentage(row.activeInputFlow, row.totalInputFlow)*100;
                             row.activeInputFlowStandardPercentage = $scope.getActivePercentage(row.activeInputFlow, row.inputFlowStandard)*100;
+                            if ($scope.lastUpdateTime == null || row.updateTime > $scope.lastUpdateTime) {
+                                $scope.lastUpdateTime = row.updateTime;
+                            }
                         });
                     });
                 }
@@ -42,13 +44,13 @@ function KeepercontainerUsedInfoCtl($rootScope, $scope, $window, $stateParams, K
                 dataset: $scope.originData
             });
         }
-        KeeperContainerService.getKeepercontainerFullSynchronizationTime().then(function(response) {
-            $scope.fullSynchronizationTime = response.message;
-        })
     })
 
-    $scope.getKeepercontainerFullSynchronizationTime = function () {
-        return $scope.fullSynchronizationTime;
+    $scope.getLastUpdateTime = function () {
+        if ($scope.lastUpdateTime == null) {
+            return '';
+        }
+        return $scope.lastUpdateTime.substring(0, 19).replace("T", " ");
     }
 
     $scope.getActivePercentage = function (active, total) {

@@ -7,19 +7,17 @@ import com.ctrip.xpipe.command.AbstractCommand;
 import com.ctrip.xpipe.concurrent.AbstractExceptionLogTask;
 import com.ctrip.xpipe.redis.checker.alert.ALERT_TYPE;
 import com.ctrip.xpipe.redis.checker.alert.AlertEntity;
-import com.ctrip.xpipe.redis.checker.alert.AlertMessageEntity;
 import com.ctrip.xpipe.redis.checker.alert.message.AlertEntityHolder;
 import com.ctrip.xpipe.redis.checker.alert.message.AlertEntityHolderManager;
 import com.ctrip.xpipe.redis.checker.alert.message.holder.DefaultAlertEntityHolderManager;
-import com.ctrip.xpipe.redis.checker.alert.policy.receiver.EmailReceiverModel;
 import com.ctrip.xpipe.utils.VisibleForTesting;
 import com.google.common.collect.Lists;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import javax.annotation.PostConstruct;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -29,6 +27,8 @@ import java.util.concurrent.TimeUnit;
  */
 @Component
 public class RepeatAlertEntitySubscriber extends AbstractAlertEntitySubscriber {
+
+    private static final Logger logger = LoggerFactory.getLogger(RepeatAlertEntitySubscriber.class);
 
     private AlertEntityHolderManager holderManager = new DefaultAlertEntityHolderManager();
 
@@ -40,7 +40,7 @@ public class RepeatAlertEntitySubscriber extends AbstractAlertEntitySubscriber {
         scheduled.scheduleWithFixedDelay(new AbstractExceptionLogTask() {
             @Override
             protected void doRun() {
-                logger.debug("[scheduledTask]Stored alerts: {}", holderManager);
+                logger.debug("[RepeatAlertEntitySubscriber]Stored alerts: {}", holderManager);
                 scheduledReport();
 
             }
@@ -53,7 +53,7 @@ public class RepeatAlertEntitySubscriber extends AbstractAlertEntitySubscriber {
         synchronized (this) {
             prevHolderManager = refresh();
         }
-        logger.debug("[scheduledReport]Keep receiving alerts: {}", holderManager.allAlertsToSend());
+        logger.debug("[RepeatAlertEntitySubscriber]Keep receiving alerts: {}", holderManager.allAlertsToSend());
         if(prevHolderManager == null || !prevHolderManager.hasAlertsToSend()) {
             return;
         }
@@ -66,7 +66,7 @@ public class RepeatAlertEntitySubscriber extends AbstractAlertEntitySubscriber {
                 if(commandFuture.isSuccess()) {
                     new ScheduledSendRepeatAlertTask(commandFuture.getNow()).execute(executors);
                 } else {
-                    logger.error("[ScheduledCleanupExpiredAlertTask]", commandFuture.cause());
+                    logger.error("[RepeatAlertEntitySubscriber]ScheduledCleanupExpiredAlertTask", commandFuture.cause());
                 }
             }
         });
@@ -76,7 +76,7 @@ public class RepeatAlertEntitySubscriber extends AbstractAlertEntitySubscriber {
 
     @Override
     protected void doProcessAlert(AlertEntity alert) {
-        if(ignoreAlert(alert)) {
+        if(ignoreAlert(alert) || alert.getAlertType().onlyTrack()) {
             return;
         }
         synchronized (this) {
@@ -94,6 +94,11 @@ public class RepeatAlertEntitySubscriber extends AbstractAlertEntitySubscriber {
         return ignoredAlertType.contains(alert.getAlertType());
     }
 
+    @Override
+    public Logger getLogger() {
+        return logger;
+    }
+
     class ScheduledSendRepeatAlertTask extends AbstractCommand<Void> {
 
         private AlertEntityHolderManager alerts;
@@ -104,16 +109,7 @@ public class RepeatAlertEntitySubscriber extends AbstractAlertEntitySubscriber {
 
         @Override
         protected void doExecute() throws Exception {
-            Map<EmailReceiverModel, Map<ALERT_TYPE, Set<AlertEntity>>> map = alertPolicyManager().queryGroupedEmailReceivers(alerts);
-
-            for(Map.Entry<EmailReceiverModel, Map<ALERT_TYPE, Set<AlertEntity>>> mailGroup : map.entrySet()) {
-                if(mailGroup.getValue() == null || mailGroup.getValue().isEmpty()) {
-                    continue;
-                }
-                logger.debug("[ScheduledSendRepeatAlertTask] Mail out: {}", mailGroup.getValue());
-                AlertMessageEntity message = getMessage(mailGroup.getKey(), mailGroup.getValue(), true);
-                emailMessage(message);
-            }
+            doSend(alerts, true);
             future().setSuccess();
         }
 

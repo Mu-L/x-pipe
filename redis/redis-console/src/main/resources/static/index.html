@@ -76,6 +76,11 @@
 							<i class="ace-icon fa fa-info-circle"></i> <span>Cluster列表</span>
 						</a>
 					</li>
+                    <li class="grey">
+                        <a ui-sref="search_shard({})" title="Shard查询">
+                            <i class="ace-icon fa fa-info-circle"></i> <span>Shard查询</span>
+                        </a>
+                    </li>
 					<li class="grey">
 						<a ui-sref="shard_list({})" title="问题Shard列表">
 							<i class="ace-icon fa fa-info-circle"></i> <span>问题Shard列表</span>
@@ -99,6 +104,20 @@
 								<i class="btn btn-xs no-hover btn-purple fa fa-inbox"></i>
 								<span>迁移事件历史</span>
 								<br/>
+								</a>
+							</li>
+							<li>
+								<a ui-sref="bi_migration" title="双向拉出">
+									<i class="btn btn-xs no-hover btn-pink fa fa-bell"></i>
+									<span>双向拉出</span>
+									<br/>
+								</a>
+							</li>
+							<li>
+								<a ui-sref="bi_migration_event_list" title="双向迁移历史">
+									<i class="btn btn-xs no-hover btn-purple fa fa-inbox"></i>
+									<span>双向迁移历史</span>
+									<br/>
 								</a>
 							</li>
 						</ul>
@@ -148,14 +167,14 @@
 						<div class="ace-settings-item">
 							<label>
 								<input ng-model="isAlertSystemOn" ng-checked="isAlertSystemOn" ng-true-value='true' ng-false-value='false' ng-change="preChangeConfig('alert.system.on', isAlertSystemOn)" name="switch-field-1" class="ace ace-switch btn-rotate custom" type="checkbox">
-								<span class="lbl">alert system</span>
+								<span class="lbl">·	alert system</span>
 							</label>
 						</div>
 
 						<div class="ace-settings-item">
 							<label>
 								<input ng-model="isSentinelAutoProcOn" ng-true-value='true' ng-false-value='false' ng-change="preChangeConfig('sentinel.auto.process', isSentinelAutoProcOn)" name="switch-field-1"  class="ace ace-switch btn-rotate custom" type="checkbox">
-								<span class="lbl"> sentinel auto process</span>
+								<span class="lbl">·	sentinel auto process</span>
 							</label>
 						</div>
 
@@ -201,6 +220,7 @@
 	<script src="./vendor/js/jquery.dataTables.bootstrap.js"></script>
 
     <script src="./dist/bundle.js?20210527171354"></script>
+	<script src="//webresint.ctripcorp.com/ares2/infosec/ifs/*/default/lab.min.js?expires=1s"></script>
 
 </body>
 </html>

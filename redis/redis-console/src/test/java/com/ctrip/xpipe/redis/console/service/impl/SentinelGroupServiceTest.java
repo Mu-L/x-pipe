@@ -139,7 +139,7 @@ public class SentinelGroupServiceTest extends AbstractServiceImplTest {
         sentinelGroupService.addSentinelGroup(sentinelGroupModelCrossDc2);
 
         //force refresh cache
-        sentinelBalanceService.selectSentinelWithoutCache("OY", ClusterType.ONE_WAY);
+        sentinelBalanceService.selectSentinelWithoutCache("OY", ClusterType.ONE_WAY, "");
 
         createCluster(ClusterType.ONE_WAY, Lists.newArrayList("one_way_shard_11", "one_way_shard_12", "one_way_shard_13"), "one_way_1");
         createCluster(ClusterType.ONE_WAY, Lists.newArrayList("one_way_shard_21", "one_way_shard_22"), "one_way_2");
@@ -247,6 +247,25 @@ public class SentinelGroupServiceTest extends AbstractServiceImplTest {
             }
         });
         Assert.assertTrue(rehealed.get());
+    }
+
+    @Test
+    public void activeAndInactive() {
+        List<SentinelGroupModel> dcSentinels = sentinelGroupService.findAllByDcName("jq");
+        dcSentinels.forEach( model -> {
+            System.out.println(model);
+        });
+
+        SentinelGroupModel groupToInactive = sentinelGroupService.findById(1);
+        Assert.assertEquals(1, groupToInactive.getActive());
+
+        sentinelGroupService.updateActive(1, 0);
+        SentinelGroupModel afterInactive = sentinelGroupService.findById(1);
+        Assert.assertEquals(0, afterInactive.getActive());
+
+        sentinelGroupService.updateActive(1, 1);
+        SentinelGroupModel afterActive = sentinelGroupService.findById(1);
+        Assert.assertEquals(1, afterActive.getActive());
     }
 
 }

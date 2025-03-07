@@ -6,11 +6,13 @@ import com.ctrip.xpipe.redis.console.model.ConfigModel;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
+import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 
+import java.util.ArrayList;
 import java.util.List;
 
-import static com.ctrip.xpipe.redis.console.service.ConfigService.KEY_SENTINEL_CHECK_EXCLUDE;
+import static com.ctrip.xpipe.redis.console.service.ConfigService.*;
 
 /**
  * @author chen.zhu
@@ -84,6 +86,12 @@ public class ConfigServiceTest extends AbstractConsoleIntegrationTest {
     }
 
     @Test
+    public void testGetConfigs() throws Exception {
+        List<ConfigModel> configs = service.getConfigs(KEY_KEEPER_CONTAINER_STANDARD);
+        Assert.assertEquals(configs.size(), 0);
+    }
+
+    @Test
     public void testStopSentinelCheck() throws Exception {
         configModel.setSubKey(mockClusterName);
         service.stopSentinelCheck(configModel, 1);
@@ -103,6 +111,23 @@ public class ConfigServiceTest extends AbstractConsoleIntegrationTest {
         Assert.assertEquals(configModels.size(), 1);
         Assert.assertEquals(configModels.get(0).getSubKey(), mockClusterName);
         Assert.assertEquals(configModels.get(0).getVal(), String.valueOf(true));
+    }
+
+    @Test
+    public void testSetKeyKeeperContainerIoRate() throws Exception  {
+        ConfigModel config = new ConfigModel();
+        config.setKey("");
+        try {
+            service.setKeyKeeperContainerIoRate(config);
+        } catch (Exception e) {
+            Assert.assertEquals(e.getMessage(), String.format("key should be %s !", KEY_KEEPER_CONTAINER_IO_RATE));
+        }
+        config.setKey(KEY_KEEPER_CONTAINER_IO_RATE);
+        try {
+            service.setKeyKeeperContainerIoRate(config);
+        } catch (Exception e) {
+            Assert.assertEquals(e.getMessage(), String.format("subkey:%s should be in diskTypes [] !", config.getSubKey()));
+        }
     }
 
 }

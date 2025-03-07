@@ -18,6 +18,8 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.IntSupplier;
 
 /**
@@ -31,10 +33,10 @@ public class HealthStatus extends AbstractObservable implements Startable, Stopp
 
     public static long UNSET_TIME = -1L;
 
-    private AtomicLong lastPongTime = new AtomicLong(UNSET_TIME);
+    protected AtomicLong lastPongTime = new AtomicLong(UNSET_TIME);
     private AtomicLong lastHealthDelayTime = new AtomicLong(UNSET_TIME);
 
-    private AtomicReference<HEALTH_STATE> state = new AtomicReference<>(HEALTH_STATE.UNKNOWN);
+    protected AtomicReference<HEALTH_STATE> state = new AtomicReference<>(HEALTH_STATE.UNKNOWN);
 
     protected RedisHealthCheckInstance instance;
     protected final IntSupplier delayDownAfterMilli;
@@ -47,6 +49,12 @@ public class HealthStatus extends AbstractObservable implements Startable, Stopp
     protected static final String currentDcId = FoundationService.DEFAULT.getDataCenter();
     protected static Logger delayLogger = LoggerFactory.getLogger(HealthStatus.class.getName() + ".delay");
 
+    private ReadWriteLock lastMarkHandledLock = new ReentrantReadWriteLock();
+
+    private volatile boolean lastMarkHandled = false;
+
+    private volatile long lastMarkHandledTime = -1;
+
     public HealthStatus(RedisHealthCheckInstance instance, ScheduledExecutorService scheduled){
         this.instance = instance;
         this.scheduled = scheduled;
@@ -54,15 +62,15 @@ public class HealthStatus extends AbstractObservable implements Startable, Stopp
         this.instanceLongDelayMilli = ()->instance.getHealthCheckConfig().instanceLongDelayMilli();
         this.delayDownAfterMilli = () -> {
             DelayConfig delayConfig = instance.getHealthCheckConfig().getDelayConfig(instance.getCheckInfo().getClusterId(), currentDcId, instance.getCheckInfo().getDcId());
-            return delayConfig.getClusterLevelDelayDownAfterMilli() > 0 ? delayConfig.getClusterLevelDelayDownAfterMilli() : delayConfig.getDcLevelDelayDownAfterMilli();};
+            return delayConfig.getClusterLevelDelayDownAfterMilli();};
         this.healthyDelayMilli = () -> {
             DelayConfig delayConfig = instance.getHealthCheckConfig().getDelayConfig(instance.getCheckInfo().getClusterId(), currentDcId, instance.getCheckInfo().getDcId());
-            return delayConfig.getClusterLevelHealthyDelayMilli() > 0 ? delayConfig.getClusterLevelHealthyDelayMilli() : delayConfig.getDcLevelHealthyDelayMilli();};
+            return delayConfig.getClusterLevelHealthyDelayMilli();};
         checkParam();
     }
 
     private void checkParam() {
-        if(this.delayDownAfterMilli.getAsInt() < this.pingDownAfterMilli.getAsInt()) {
+        if(this.delayDownAfterMilli.getAsInt() > 0 && this.delayDownAfterMilli.getAsInt() < this.pingDownAfterMilli.getAsInt()) {
             logger.error("Ping-Down-After-Milli must smaller than Delay-Down-After-Milli");
         }
     }
@@ -110,7 +118,7 @@ public class HealthStatus extends AbstractObservable implements Startable, Stopp
         return lastHealthDelayTime.get() < 0 && lastPongTime.get() < 0;
     }
 
-    void loading() {
+    protected void loading() {
         HEALTH_STATE preState = state.get();
         if(preState.equals(preState.afterPingFail())) {
             return;
@@ -124,7 +132,7 @@ public class HealthStatus extends AbstractObservable implements Startable, Stopp
         }
     }
 
-    void pong(){
+    protected void pong(){
         lastPongTime.set(System.currentTimeMillis());
         setPingUp();
     }
@@ -135,13 +143,15 @@ public class HealthStatus extends AbstractObservable implements Startable, Stopp
         }
     }
 
+    protected void subSuccess(){}
+
     void delay(long delayMilli, long...srcShardDbId){
 
         //first time
         lastHealthDelayTime.compareAndSet(UNSET_TIME, System.currentTimeMillis());
 
         delayLogger.debug("{}, {}", instance.getCheckInfo().getHostPort(), delayMilli);
-        if(delayMilli >= 0 && delayMilli <= healthyDelayMilli.getAsInt()){
+        if (delayMilli >= 0 && (delayMilli <= healthyDelayMilli.getAsInt() || healthyDelayMilli.getAsInt() < 0)) {
             lastHealthDelayTime.set(System.currentTimeMillis());
             setDelayUp();
         }
@@ -171,7 +181,9 @@ public class HealthStatus extends AbstractObservable implements Startable, Stopp
         final int delayDownAfter = delayDownAfterMilli.getAsInt();
         final int instanceLongDelay = instanceLongDelayMilli.getAsInt();
 
-        if ( delayDownTime > delayDownAfter) {
+        if (delayDownAfter < 0) {
+            // skip for negative distance
+        } else if ( delayDownTime > delayDownAfter) {
             setDelayDown();
         }else if(delayDownTime >= instanceLongDelay){
             setDelayHalfDown();
@@ -271,6 +283,40 @@ public class HealthStatus extends AbstractObservable implements Startable, Stopp
 
     public long getLastHealthyDelayTime() {
         return lastHealthDelayTime.get();
+    }
+
+    public void updateLastMarkHandled(boolean handleMarkUp) {
+        try {
+            lastMarkHandledLock.writeLock().lock();
+            this.lastMarkHandled = handleMarkUp;
+            this.lastMarkHandledTime = System.currentTimeMillis();
+        } finally {
+            lastMarkHandledLock.writeLock().unlock();
+        }
+    }
+
+    public Boolean getLastMarkHandled(long timeoutMill) {
+        try {
+            lastMarkHandledLock.readLock().lock();
+            long current = System.currentTimeMillis();
+            if (lastMarkHandledTime > current) {
+                resetLastMarkHandled();
+            } else if (lastMarkHandledTime > 0 && lastMarkHandledTime + timeoutMill > current) {
+                return lastMarkHandled;
+            }
+        } finally {
+            lastMarkHandledLock.readLock().unlock();
+        }
+        return null;
+    }
+
+    private void resetLastMarkHandled() {
+        try {
+            lastMarkHandledLock.writeLock().lock();
+            this.lastMarkHandledTime = -1;
+        } finally {
+            lastMarkHandledLock.writeLock().unlock();
+        }
     }
 
 }

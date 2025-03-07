@@ -1,5 +1,7 @@
 package com.ctrip.xpipe.redis.core.redis.operation;
 
+import com.ctrip.xpipe.redis.core.redis.operation.transfer.*;
+import com.ctrip.xpipe.tuple.Pair;
 import com.ctrip.xpipe.utils.StringUtil;
 
 /**
@@ -98,7 +100,43 @@ public enum RedisOpType {
     EXEC(false, 1),
     SCRIPT(false, -2),
     MOVE(false, 3),
-    UNKNOWN(false, -1, true);
+    UNKNOWN(false, -1, true),
+
+    //crdt register
+    CRDT_SET(false, -7, RedisOpCrdtSetTransfer.getInstance()),
+    CRDT_MSET(true, -6, RedisOpCrdtMSetTransfer.getInstance()),
+    CRDT_DEL_REG(false, -5, RedisOpCrdtDelTransfer.getInstance()),
+
+    //crdt rc
+    CRDT_RC(false, 7, RedisOpCrdtRcTransfer.getInstance()),
+    CRDT_COUNTER(false, 8, RedisOpCrdtCounterTransfer.getInstance()),
+    CRDT_MSET_RC(true, -6, RedisOpCrdtMSetRcTransfer.getInstance()),
+    CRDT_DEL_RC(false, -5, RedisOpCrdtDelTransfer.getInstance()),
+
+    //crdt hash
+    CRDT_HSET(false, -5, RedisOpCrdtHSetTransfer.getInstance()),
+    CRDT_REM_HASH(false, -6, RedisOpCrdtRemHashTransfer.getInstance()),
+    CRDT_DEL_HASH(false, 6, RedisOpCrdtDelTransfer.getInstance()),
+
+    //crdt set
+    CRDT_SADD(false, -6, RedisOpCrdtSAddTransfer.getInstance()),
+    CRDT_SREM(false, -6, RedisOpCrdtSremTransfer.getInstance()),
+    CRDT_DEL_SET(false, -5, RedisOpCrdtDelTransfer.getInstance()),
+
+    //crdt sortedSet
+    CRDT_ZADD(false, -7, RedisOpCrdtZAddTransfer.getInstance()),
+    CRDT_ZREM(false, -6, RedisOpCrdtZRemTransfer.getInstance()),
+    CRDT_ZINCRBY(false, -7, RedisOpCrdtZIncrbyTransfer.getInstance()),
+    CRDT_DEL_SS(false, 5, RedisOpCrdtDelTransfer.getInstance()),
+
+    //crdt other
+    CRDT_SELECT(false, 3, RedisOpCrdtSelectTransfer.getInstance()),
+    CRDT_MULTI(false, 2, RedisOpCrdtMultiTransfer.getInstance()),
+    CRDT_EXEC(false, 2, RedisOpCrdtExecTransfer.getInstance()),
+    CRDT_EXPIRE(false, 6, RedisOpCrdtExpireTransfer.getInstance()),
+    CRDT_PERSIST(false, 4, RedisOpCrdtPersistTransfer.getInstance()),
+    CRDT_OVC(false, 2, true),
+    CRDT_PUBLISH(false, 3, true);
 
     // Support multi key or not
     private boolean supportMultiKey;
@@ -108,14 +146,25 @@ public enum RedisOpType {
 
     private boolean swallow;
 
+    private RedisOpCrdtTransfer transfer;
+
     RedisOpType(boolean multiKey, int arity) {
         this(multiKey, arity, false);
     }
 
     RedisOpType(boolean multiKey, int arity, boolean swallow) {
+        this(multiKey, arity, swallow, null);
+    }
+
+    RedisOpType(boolean multiKey, int arity, RedisOpCrdtTransfer transfer) {
+        this(multiKey, arity, false, transfer);
+    }
+
+    RedisOpType(boolean multiKey, int arity, boolean swallow, RedisOpCrdtTransfer transfer) {
         this.supportMultiKey = multiKey;
         this.arity = arity;
         this.swallow = swallow;
+        this.transfer = transfer;
     }
 
     public boolean supportMultiKey() {
@@ -130,18 +179,25 @@ public enum RedisOpType {
         return swallow;
     }
 
+    public Pair<RedisOpType, byte[][]> transfer(RedisOpType redisOpType, byte[][] args) {
+        if (null == transfer) {
+            return Pair.of(redisOpType, args);
+        }
+        return this.transfer.transformCrdtRedisOp(redisOpType, args);
+    }
+
     public boolean checkArgcNotStrictly(Object[] args) {
         return args.length >= Math.abs(arity);
     }
 
     public static RedisOpType lookup(String name) {
-        if (StringUtil.isEmpty(name)) return UNKNOWN;
-
+        if (StringUtil.isEmpty(name)) {
+            return UNKNOWN;
+        }
         try {
             return valueOf(name.replace('.', '_').toUpperCase());
         } catch (IllegalArgumentException illegalArgumentException) {
             return UNKNOWN;
         }
     }
-
 }

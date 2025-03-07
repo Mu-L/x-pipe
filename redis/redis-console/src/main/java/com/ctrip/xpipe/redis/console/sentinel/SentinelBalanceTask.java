@@ -12,4 +12,7 @@ public interface SentinelBalanceTask extends Command<Void> {
 
     int getTargetUsages();
 
+    int getTotalActiveSize();
+
+    String getTag();
 }

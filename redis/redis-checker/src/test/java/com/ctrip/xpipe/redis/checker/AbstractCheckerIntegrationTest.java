@@ -5,7 +5,9 @@ import com.ctrip.xpipe.api.migration.OuterClientService;
 import com.ctrip.xpipe.concurrent.DefaultExecutorFactory;
 import com.ctrip.xpipe.lifecycle.LifecycleHelper;
 import com.ctrip.xpipe.netty.commands.NettyKeyedPoolClientFactory;
+import com.ctrip.xpipe.redis.core.client.NettyRedisPoolClientFactory;
 import com.ctrip.xpipe.pool.XpipeNettyClientKeyedObjectPool;
+import com.ctrip.xpipe.redis.checker.cluster.GroupCheckerLeaderElector;
 import com.ctrip.xpipe.redis.checker.config.CheckerConfig;
 import com.ctrip.xpipe.redis.checker.config.CheckerDbConfig;
 import com.ctrip.xpipe.redis.checker.config.impl.DefaultCheckerDbConfig;
@@ -13,8 +15,10 @@ import com.ctrip.xpipe.redis.checker.healthcheck.HealthChecker;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.ping.DefaultPingService;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.ping.PingService;
 import com.ctrip.xpipe.redis.checker.impl.*;
-import com.ctrip.xpipe.redis.core.meta.CurrentDcAllMeta;
+import com.ctrip.xpipe.redis.core.config.ConsoleCommonConfig;
 import com.ctrip.xpipe.redis.core.meta.MetaCache;
+import com.ctrip.xpipe.redis.core.route.RouteChooseStrategyFactory;
+import com.ctrip.xpipe.redis.core.route.impl.DefaultRouteChooseStrategyFactory;
 import com.ctrip.xpipe.redis.core.spring.AbstractRedisConfigContext;
 import com.ctrip.xpipe.utils.OsUtils;
 import com.ctrip.xpipe.utils.XpipeThreadFactory;
@@ -70,15 +74,15 @@ public class AbstractCheckerIntegrationTest extends AbstractCheckerTest {
             return new TestMetaCache();
         }
 
-        @Bean
-        public CurrentDcAllMeta testCurrentDcAllMeta() {
-            return new TestCurrentDcAllMetaCache();
-        }
-
 
         @Bean
         public TestPersistenceCache persistence() {
             return new TestPersistenceCache();
+        }
+
+        @Bean
+        public ConsoleCommonConfig consoleCommonConfig() {
+            return new TestCommonConfig();
         }
 
         @Bean
@@ -112,13 +116,18 @@ public class AbstractCheckerIntegrationTest extends AbstractCheckerTest {
         }
 
         @Bean
-        public RemoteCheckerManager remoteCheckerManager(CheckerConfig checkerConfig) {
-            return new DefaultRemoteCheckerManager(checkerConfig);
+        public RemoteCheckerManager remoteCheckerManager(CheckerConfig checkerConfig, MetaCache metaCache) {
+            return new DefaultRemoteCheckerManager(checkerConfig, new GroupCheckerLeaderElector("test"), metaCache);
         }
 
         @Bean
         public ClusterHealthManager clusterHealthManager(@Qualifier(GLOBAL_EXECUTOR) ExecutorService executorService) {
             return new CheckerClusterHealthManager(executorService);
+        }
+
+        @Bean
+        public RouteChooseStrategyFactory routeChooseStrategyFactory() {
+            return new DefaultRouteChooseStrategyFactory();
         }
 
         @Bean
@@ -134,9 +143,9 @@ public class AbstractCheckerIntegrationTest extends AbstractCheckerTest {
             );
         }
 
-        @Bean(name = KEYED_NETTY_CLIENT_POOL)
+        @Bean(name = REDIS_KEYED_NETTY_CLIENT_POOL)
         public XpipeNettyClientKeyedObjectPool getReqResNettyClientPool() throws Exception {
-            XpipeNettyClientKeyedObjectPool keyedObjectPool = new XpipeNettyClientKeyedObjectPool(getKeyedPoolClientFactory(8));
+            XpipeNettyClientKeyedObjectPool keyedObjectPool = new XpipeNettyClientKeyedObjectPool(getRedisPoolClientFactory(8));
             LifecycleHelper.initializeIfPossible(keyedObjectPool);
             LifecycleHelper.startIfPossible(keyedObjectPool);
             return keyedObjectPool;
@@ -144,7 +153,23 @@ public class AbstractCheckerIntegrationTest extends AbstractCheckerTest {
 
         @Bean(name = REDIS_SESSION_NETTY_CLIENT_POOL)
         public XpipeNettyClientKeyedObjectPool getRedisSessionNettyClientPool() throws Exception {
-            XpipeNettyClientKeyedObjectPool keyedObjectPool = new XpipeNettyClientKeyedObjectPool(getKeyedPoolClientFactory(12));
+            XpipeNettyClientKeyedObjectPool keyedObjectPool = new XpipeNettyClientKeyedObjectPool(getRedisPoolClientFactory(12));
+            LifecycleHelper.initializeIfPossible(keyedObjectPool);
+            LifecycleHelper.startIfPossible(keyedObjectPool);
+            return keyedObjectPool;
+        }
+
+        @Bean(name = SENTINEL_KEYED_NETTY_CLIENT_POOL)
+        public XpipeNettyClientKeyedObjectPool getSentinelReqResNettyClientPool() throws Exception {
+            XpipeNettyClientKeyedObjectPool keyedObjectPool = new XpipeNettyClientKeyedObjectPool(getKeyedPoolClientFactory(8));
+            LifecycleHelper.initializeIfPossible(keyedObjectPool);
+            LifecycleHelper.startIfPossible(keyedObjectPool);
+            return keyedObjectPool;
+        }
+
+        @Bean(name = PROXY_KEYED_NETTY_CLIENT_POOL)
+        public XpipeNettyClientKeyedObjectPool getProxyReqResNettyClientPool() throws Exception {
+            XpipeNettyClientKeyedObjectPool keyedObjectPool = new XpipeNettyClientKeyedObjectPool(getKeyedPoolClientFactory(8));
             LifecycleHelper.initializeIfPossible(keyedObjectPool);
             LifecycleHelper.startIfPossible(keyedObjectPool);
             return keyedObjectPool;
@@ -181,6 +206,10 @@ public class AbstractCheckerIntegrationTest extends AbstractCheckerTest {
         private NettyKeyedPoolClientFactory getKeyedPoolClientFactory(int eventLoopThreads) {
             return new NettyKeyedPoolClientFactory(eventLoopThreads);
         }
+
+        private NettyKeyedPoolClientFactory getRedisPoolClientFactory(int eventLoopThreads) {
+            return new NettyRedisPoolClientFactory(eventLoopThreads, "xpipe", () -> true);
+        }
         
         @Bean
         public FoundationService foundationService() {
@@ -196,7 +225,12 @@ public class AbstractCheckerIntegrationTest extends AbstractCheckerTest {
                 }
 
                 @Override
-                public Map<String, OuterClientService.ClusterInfo> getAllActiveDcClusters(String activeDc) {
+                public Map<String, OuterClientService.ClusterInfo> getAllDcClusters(String dc) {
+                    return null;
+                }
+
+                @Override
+                public Map<String, OuterClientService.ClusterInfo> getAllCurrentDcClusters(String dc) {
                     return null;
                 }
 

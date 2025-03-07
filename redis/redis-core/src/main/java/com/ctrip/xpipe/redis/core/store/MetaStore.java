@@ -53,7 +53,9 @@ public interface MetaStore {
 	 * @throws IOException 
 	 */
 	void becomeBackup() throws IOException;
-	
+
+	ReplicationStoreMeta rdbConfirm(String replId, long beginOffset, String gtidSet, String rdbFile, RdbStore.Type type, EofType eofType, String cmdFilePrefix) throws IOException;
+
 	ReplicationStoreMeta rdbBegun(String replId, long beginOffset, String rdbFile, EofType eofType, String cmdFilePrefix) throws IOException;
 
 	boolean attachRdbGtidSet(String rdbFile, String gtidSet) throws IOException;
@@ -62,8 +64,12 @@ public interface MetaStore {
 
 	void setRdbFileSize(long rdbFileSize) throws IOException;
 
+	void setRordbFileSize(long rordbFileSize) throws IOException;
+
 	@Deprecated
 	void masterChanged(long keeperOffset, DefaultEndPoint newMasterEndpoint, String newMasterRunid, long newMasterReplOffset) throws IOException;
+
+	ReplicationStoreMeta checkReplIdAndUpdateRdbInfo(String rdbFile, RdbStore.Type type, EofType eofType, long rdbOffset, String gtidSet, String expectedReplId) throws IOException;
 
 	ReplicationStoreMeta checkReplIdAndUpdateRdbInfo(String rdbFile, EofType eofType, long rdbOffset, String expectedReplId) throws IOException;
 	

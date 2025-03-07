@@ -17,11 +17,13 @@ import com.ctrip.xpipe.redis.keeper.monitor.KeeperMonitor;
 import com.ctrip.xpipe.redis.keeper.monitor.KeepersMonitorManager;
 import com.ctrip.xpipe.redis.keeper.monitor.impl.NoneKeepersMonitorManager;
 import com.ctrip.xpipe.redis.keeper.monitor.impl.NoneKeepersMonitorManager.NoneKeeperMonitor;
+import com.ctrip.xpipe.redis.keeper.ratelimit.SyncRateManager;
 import com.ctrip.xpipe.redis.keeper.store.DefaultReplicationStore;
 import com.ctrip.xpipe.redis.keeper.store.DefaultReplicationStoreManager;
 import com.ctrip.xpipe.redis.core.store.OffsetReplicationProgress;
 import io.netty.channel.ChannelFuture;
 import org.junit.BeforeClass;
+import org.mockito.Mockito;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -104,7 +106,7 @@ public class AbstractRedisKeeperTest extends AbstractRedisTest {
 
 	protected ReplicationStoreManager createReplicationStoreManager(ReplId replId, String keeperRunid, KeeperConfig keeperConfig, File storeDir) {
 		
-		DefaultReplicationStoreManager replicationStoreManager = new DefaultReplicationStoreManager(keeperConfig, replId, keeperRunid, storeDir, createkeeperMonitor());
+		DefaultReplicationStoreManager replicationStoreManager = new DefaultReplicationStoreManager(keeperConfig, replId, keeperRunid, storeDir, createkeeperMonitor(), Mockito.mock(SyncRateManager.class));
 		
 		replicationStoreManager.addObserver(new Observer() {
 			
@@ -146,14 +148,14 @@ public class AbstractRedisKeeperTest extends AbstractRedisTest {
 	}
 
 	
-	protected String readRdbFileTilEnd(ReplicationStore replicationStore) throws IOException, InterruptedException {
+	protected byte[] readRdbFileTilEnd(ReplicationStore replicationStore) throws IOException, InterruptedException {
 
 		RdbStore rdbStore = ((DefaultReplicationStore)replicationStore).getRdbStore();
 		
 		return readRdbFileTilEnd(rdbStore);
 	}
 
-	protected String readRdbFileTilEnd(RdbStore rdbStore) throws IOException, InterruptedException {
+	protected byte[] readRdbFileTilEnd(RdbStore rdbStore) throws IOException, InterruptedException {
 
 		final ByteArrayWritableByteChannel bachannel = new ByteArrayWritableByteChannel();
 		final CountDownLatch latch = new CountDownLatch(1);
@@ -195,7 +197,7 @@ public class AbstractRedisKeeperTest extends AbstractRedisTest {
 			}
 		});
 		latch.await(5, TimeUnit.SECONDS);
-		return new String(bachannel.getResult());
+		return bachannel.getResult();
 	}
 
 	public String readCommandFileTilEnd(final ReplicationStore replicationStore, int expectedLen) throws IOException {

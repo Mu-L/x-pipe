@@ -1,6 +1,7 @@
 package com.ctrip.xpipe.redis.console.resources;
 
 
+import com.ctrip.xpipe.api.foundation.FoundationService;
 import com.ctrip.xpipe.api.migration.OuterClientService;
 import com.ctrip.xpipe.cluster.ClusterType;
 import com.ctrip.xpipe.redis.console.config.ConsoleConfig;
@@ -19,12 +20,14 @@ import com.ctrip.xpipe.tuple.Pair;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import org.junit.Assert;
+import org.junit.Before;
 import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnitRunner;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.*;
 
@@ -34,7 +37,6 @@ import static org.mockito.Mockito.*;
 @RunWith(MockitoJUnitRunner.Silent.class)
 public class DcMetaSynchronizerTest {
 
-    @InjectMocks
     private DcMetaSynchronizer dcMetaSynchronizer;
 
     @Mock
@@ -70,17 +72,26 @@ public class DcMetaSynchronizerTest {
     private String singleDcCacheCluster = "SingleDcCacheCluster";
     private String localDcCacheCluster = "LocalDcCacheCluster";
 
+    private String dcId = FoundationService.DEFAULT.getDataCenter();
+
+    @Before
+    public void beforeDcMetaSynchronizerTest() {
+        dcMetaSynchronizer = new DcMetaSynchronizer(consoleConfig, metaCache, redisService, shardService,
+                clusterService, dcService, organizationService, sentinelBalanceService,
+                clusterTypeUpdateEventFactory, outerClientService, dcId);
+    }
+
     @Test
     public void syncNoChangedTest() throws Exception {
         when(organizationService.getAllOrganizations()).thenReturn(Lists.newArrayList(
                 new OrganizationTbl().setId(8L).setOrgId(44).setOrgName("框架"),
                 new OrganizationTbl().setId(9L).setOrgId(45).setOrgName("酒店")
         ));
-
+        OuterClientService. DcMeta meta =  credisDcMeta().setDcName(dcId);
         when(consoleConfig.getOuterClusterTypes()).thenReturn(Sets.newHashSet("SINGLE_DC", "LOCAL_DC"));
-        when(outerClientService.getOutClientDcMeta(DcMetaSynchronizer.currentDcId)).thenReturn(credisDcMeta().setDcName(DcMetaSynchronizer.currentDcId));
-        when(metaCache.getXpipeMeta()).thenReturn(new XpipeMeta().addDc(xpipeDcMeta().setId(DcMetaSynchronizer.currentDcId)));
-        when(dcService.find(DcMetaSynchronizer.currentDcId)).thenReturn(new DcTbl().setId(1));
+        when(outerClientService.getOutClientDcMeta(dcId)).thenReturn(meta);
+        when(metaCache.getXpipeMeta()).thenReturn(new XpipeMeta().addDc(xpipeDcMeta().setId(dcId)));
+        when(dcService.find(anyString())).thenReturn(new DcTbl().setId(1));
         when(clusterService.find(singleDcCacheCluster)).thenReturn(new ClusterTbl().setId(17730).setClusterName(singleDcCacheCluster).setActivedcId(1).setClusterType(OuterClientService.ClusterType.SINGEL_DC.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(18));
         when(clusterService.find(localDcCacheCluster)).thenReturn(new ClusterTbl().setId(17728).setClusterName(localDcCacheCluster).setActivedcId(1).setClusterType(OuterClientService.ClusterType.LOCAL_DC.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(9));
         dcMetaSynchronizer.sync();
@@ -107,15 +118,19 @@ public class DcMetaSynchronizerTest {
         ));
 
         when(consoleConfig.getOuterClusterTypes()).thenReturn(Sets.newHashSet("SINGLE_DC", "LOCAL_DC"));
-        when(outerClientService.getOutClientDcMeta(DcMetaSynchronizer.currentDcId)).thenReturn(credisDcMeta().setDcName(DcMetaSynchronizer.currentDcId));
+        when(outerClientService.getOutClientDcMeta(dcId)).thenReturn(credisDcMeta().setDcName(dcId));
 
-        DcMeta xpipeDcMeta = xpipeDcMeta().setId(DcMetaSynchronizer.currentDcId);
+        DcMeta xpipeDcMeta = xpipeDcMeta().setId(dcId);
         xpipeDcMeta.findCluster(singleDcCacheCluster).setActiveDc("oy");
 
         when(metaCache.getXpipeMeta()).thenReturn(new XpipeMeta().addDc(xpipeDcMeta));
-        when(dcService.find(DcMetaSynchronizer.currentDcId)).thenReturn(new DcTbl().setId(1));
-        when(clusterService.find(singleDcCacheCluster)).thenReturn(new ClusterTbl().setId(17730).setClusterName(singleDcCacheCluster).setActivedcId(2).setClusterType(ClusterType.SINGLE_DC.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(8));
-        when(clusterService.find(localDcCacheCluster)).thenReturn(new ClusterTbl().setId(17728).setClusterName(localDcCacheCluster).setActivedcId(1).setClusterType(ClusterType.LOCAL_DC.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(9));
+        when(dcService.find(dcId)).thenReturn(new DcTbl().setId(1));
+        when(clusterService.find(singleDcCacheCluster)).thenReturn(new ClusterTbl().setId(17730).
+                setClusterName(singleDcCacheCluster).setActivedcId(2).setClusterType(ClusterType.SINGLE_DC.name()).
+                setClusterAdminEmails("test@ctrip.com").setClusterOrgId(8));
+        when(clusterService.find(localDcCacheCluster)).thenReturn(new ClusterTbl().setId(17728).
+                setClusterName(localDcCacheCluster).setActivedcId(1).setClusterType(ClusterType.LOCAL_DC.name()).
+                setClusterAdminEmails("test@ctrip.com").setClusterOrgId(9));
         dcMetaSynchronizer.sync();
 
         verify(clusterService, never()).bindDc(any());
@@ -142,14 +157,18 @@ public class DcMetaSynchronizerTest {
         when(consoleConfig.getOuterClusterTypes()).thenReturn(Sets.newHashSet("SINGLE_DC", "LOCAL_DC"));
 
 //        change admin emails
-        OuterClientService.DcMeta credisDcMeta = credisDcMeta().setDcName(DcMetaSynchronizer.currentDcId);
+        OuterClientService.DcMeta credisDcMeta = credisDcMeta().setDcName(dcId);
         credisDcMeta.getClusters().get(singleDcCacheCluster).setOwnerEmails("test2@ctrip.com");
 
-        when(outerClientService.getOutClientDcMeta(DcMetaSynchronizer.currentDcId)).thenReturn(credisDcMeta);
-        when(metaCache.getXpipeMeta()).thenReturn(new XpipeMeta().addDc(xpipeDcMeta().setId(DcMetaSynchronizer.currentDcId)));
-        when(dcService.find(DcMetaSynchronizer.currentDcId)).thenReturn(new DcTbl().setId(1));
-        when(clusterService.find(singleDcCacheCluster)).thenReturn(new ClusterTbl().setId(17730).setClusterName(singleDcCacheCluster).setActivedcId(1).setClusterType(ClusterType.SINGLE_DC.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(8));
-        when(clusterService.find(localDcCacheCluster)).thenReturn(new ClusterTbl().setId(17728).setClusterName(localDcCacheCluster).setActivedcId(1).setClusterType(ClusterType.LOCAL_DC.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(9));
+        when(outerClientService.getOutClientDcMeta(dcId)).thenReturn(credisDcMeta);
+        when(metaCache.getXpipeMeta()).thenReturn(new XpipeMeta().addDc(xpipeDcMeta().setId(dcId)));
+        when(dcService.find(dcId)).thenReturn(new DcTbl().setId(1));
+        when(clusterService.find(singleDcCacheCluster)).thenReturn(new ClusterTbl().setId(17730).
+                setClusterName(singleDcCacheCluster).setActivedcId(1).setClusterType(ClusterType.SINGLE_DC.name()).
+                setClusterAdminEmails("test@ctrip.com").setClusterOrgId(8));
+        when(clusterService.find(localDcCacheCluster)).thenReturn(new ClusterTbl().setId(17728).
+                setClusterName(localDcCacheCluster).setActivedcId(1).setClusterType(ClusterType.LOCAL_DC.name()).
+                setClusterAdminEmails("test@ctrip.com").setClusterOrgId(9));
         dcMetaSynchronizer.sync();
 
         verify(clusterService, never()).bindDc(any());
@@ -176,15 +195,15 @@ public class DcMetaSynchronizerTest {
         when(consoleConfig.getOuterClusterTypes()).thenReturn(Sets.newHashSet("SINGLE_DC", "LOCAL_DC"));
 
 //        change cluster name
-        OuterClientService.DcMeta credisDcMeta = credisDcMeta().setDcName(DcMetaSynchronizer.currentDcId);
+        OuterClientService.DcMeta credisDcMeta = credisDcMeta().setDcName(dcId);
         OuterClientService.ClusterMeta oldSingle = credisDcMeta.getClusters().get(singleDcCacheCluster);
         credisDcMeta.getClusters().remove(singleDcCacheCluster);
         String newName = "newName";
         credisDcMeta.getClusters().put(newName, oldSingle.setName(newName));
 
-        when(outerClientService.getOutClientDcMeta(DcMetaSynchronizer.currentDcId)).thenReturn(credisDcMeta);
-        when(metaCache.getXpipeMeta()).thenReturn(new XpipeMeta().addDc(xpipeDcMeta().setId(DcMetaSynchronizer.currentDcId)));
-        when(dcService.find(DcMetaSynchronizer.currentDcId)).thenReturn(new DcTbl().setId(1));
+        when(outerClientService.getOutClientDcMeta(dcId)).thenReturn(credisDcMeta);
+        when(metaCache.getXpipeMeta()).thenReturn(new XpipeMeta().addDc(xpipeDcMeta().setId(dcId)));
+        when(dcService.find(dcId)).thenReturn(new DcTbl().setId(1));
         when(clusterService.find(singleDcCacheCluster)).thenReturn(new ClusterTbl().setId(17730).setClusterName(singleDcCacheCluster).setActivedcId(1).setClusterType(ClusterType.SINGLE_DC.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(8));
         when(clusterService.find(localDcCacheCluster)).thenReturn(new ClusterTbl().setId(17728).setClusterName(localDcCacheCluster).setActivedcId(1).setClusterType(ClusterType.LOCAL_DC.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(9));
         when(clusterService.getClusterRelatedDcs(singleDcCacheCluster)).thenReturn(Lists.newArrayList(new DcTbl().setDcName(credisDcMeta.getDcName())));
@@ -211,13 +230,13 @@ public class DcMetaSynchronizerTest {
 
         when(consoleConfig.getOuterClusterTypes()).thenReturn(Sets.newHashSet("SINGLE_DC", "LOCAL_DC"));
 
-        OuterClientService.DcMeta credisDcMeta = credisDcMeta().setDcName(DcMetaSynchronizer.currentDcId);
-        DcMeta xpipeDcMeta=xpipeDcMeta().setId(DcMetaSynchronizer.currentDcId);
+        OuterClientService.DcMeta credisDcMeta = credisDcMeta().setDcName(dcId);
+        DcMeta xpipeDcMeta=xpipeDcMeta().setId(dcId);
         xpipeDcMeta.removeCluster(singleDcCacheCluster);
 
-        when(outerClientService.getOutClientDcMeta(DcMetaSynchronizer.currentDcId)).thenReturn(credisDcMeta);
+        when(outerClientService.getOutClientDcMeta(dcId)).thenReturn(credisDcMeta);
         when(metaCache.getXpipeMeta()).thenReturn(new XpipeMeta().addDc(xpipeDcMeta));
-        when(dcService.find(DcMetaSynchronizer.currentDcId)).thenReturn(new DcTbl().setId(1));
+        when(dcService.find(dcId)).thenReturn(new DcTbl().setId(1));
         when(clusterService.find(singleDcCacheCluster)).thenReturn(new ClusterTbl().setId(17730).setClusterName(singleDcCacheCluster).setActivedcId(1).setClusterType(ClusterType.ONE_WAY.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(8));
         when(clusterService.find(localDcCacheCluster)).thenReturn(new ClusterTbl().setId(17728).setClusterName(localDcCacheCluster).setActivedcId(1).setClusterType(ClusterType.LOCAL_DC.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(9));
         dcMetaSynchronizer.sync();
@@ -243,13 +262,13 @@ public class DcMetaSynchronizerTest {
 
         when(consoleConfig.getOuterClusterTypes()).thenReturn(Sets.newHashSet("SINGLE_DC", "LOCAL_DC"));
 
-        OuterClientService.DcMeta credisDcMeta = credisDcMeta().setDcName(DcMetaSynchronizer.currentDcId);
-        DcMeta xpipeDcMeta=xpipeDcMeta().setId(DcMetaSynchronizer.currentDcId);
+        OuterClientService.DcMeta credisDcMeta = credisDcMeta().setDcName(dcId);
+        DcMeta xpipeDcMeta=xpipeDcMeta().setId(dcId);
         xpipeDcMeta.removeCluster(singleDcCacheCluster);
 
-        when(outerClientService.getOutClientDcMeta(DcMetaSynchronizer.currentDcId)).thenReturn(credisDcMeta);
+        when(outerClientService.getOutClientDcMeta(dcId)).thenReturn(credisDcMeta);
         when(metaCache.getXpipeMeta()).thenReturn(new XpipeMeta().addDc(xpipeDcMeta));
-        when(dcService.find(DcMetaSynchronizer.currentDcId)).thenReturn(new DcTbl().setId(1));
+        when(dcService.find(dcId)).thenReturn(new DcTbl().setId(1));
         when(clusterService.find(singleDcCacheCluster)).thenReturn(new ClusterTbl().setId(17730).setClusterName(singleDcCacheCluster).setActivedcId(2).setClusterType(ClusterType.SINGLE_DC.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(8));
         when(clusterService.find(localDcCacheCluster)).thenReturn(new ClusterTbl().setId(17728).setClusterName(localDcCacheCluster).setActivedcId(1).setClusterType(ClusterType.LOCAL_DC.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(9));
         dcMetaSynchronizer.sync();
@@ -276,12 +295,12 @@ public class DcMetaSynchronizerTest {
         when(consoleConfig.getOuterClusterTypes()).thenReturn(Sets.newHashSet("SINGLE_DC", "LOCAL_DC"));
 
 //        change cluster type
-        OuterClientService.DcMeta credisDcMeta = credisDcMeta().setDcName(DcMetaSynchronizer.currentDcId);
+        OuterClientService.DcMeta credisDcMeta = credisDcMeta().setDcName(dcId);
         credisDcMeta.getClusters().get(singleDcCacheCluster).setClusterType(OuterClientService.ClusterType.LOCAL_DC);
 
-        when(outerClientService.getOutClientDcMeta(DcMetaSynchronizer.currentDcId)).thenReturn(credisDcMeta);
-        when(metaCache.getXpipeMeta()).thenReturn(new XpipeMeta().addDc(xpipeDcMeta().setId(DcMetaSynchronizer.currentDcId)));
-        when(dcService.find(DcMetaSynchronizer.currentDcId)).thenReturn(new DcTbl().setId(1));
+        when(outerClientService.getOutClientDcMeta(dcId)).thenReturn(credisDcMeta);
+        when(metaCache.getXpipeMeta()).thenReturn(new XpipeMeta().addDc(xpipeDcMeta().setId(dcId)));
+        when(dcService.find(dcId)).thenReturn(new DcTbl().setId(1));
         when(clusterService.find(singleDcCacheCluster)).thenReturn(new ClusterTbl().setId(17730).setClusterName(singleDcCacheCluster).setActivedcId(1).setClusterType(ClusterType.SINGLE_DC.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(8));
         when(clusterService.find(localDcCacheCluster)).thenReturn(new ClusterTbl().setId(17728).setClusterName(localDcCacheCluster).setActivedcId(1).setClusterType(ClusterType.LOCAL_DC.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(9));
         dcMetaSynchronizer.sync();
@@ -309,16 +328,16 @@ public class DcMetaSynchronizerTest {
         ));
 
         //        add shard
-        OuterClientService.DcMeta credisDcMeta = credisDcMeta().setDcName(DcMetaSynchronizer.currentDcId);
+        OuterClientService.DcMeta credisDcMeta = credisDcMeta().setDcName(dcId);
         credisDcMeta.getClusters().get(singleDcCacheCluster).getGroups().put("newGroup", new OuterClientService.GroupMeta().
                 setClusterName(singleDcCacheCluster).setGroupName("newGroup").
                 setRedises(Lists.newArrayList(new OuterClientService.RedisMeta().setHost("127.0.0.1").setPort(6379).setMaster(true))));
 
         when(consoleConfig.getOuterClusterTypes()).thenReturn(Sets.newHashSet("SINGLE_DC", "LOCAL_DC"));
         when(consoleConfig.supportSentinelHealthCheck(any(),any())).thenReturn(false);
-        when(outerClientService.getOutClientDcMeta(DcMetaSynchronizer.currentDcId)).thenReturn(credisDcMeta);
-        when(metaCache.getXpipeMeta()).thenReturn(new XpipeMeta().addDc(xpipeDcMeta().setId(DcMetaSynchronizer.currentDcId)));
-        when(dcService.find(DcMetaSynchronizer.currentDcId)).thenReturn(new DcTbl().setId(1));
+        when(outerClientService.getOutClientDcMeta(dcId)).thenReturn(credisDcMeta);
+        when(metaCache.getXpipeMeta()).thenReturn(new XpipeMeta().addDc(xpipeDcMeta().setId(dcId)));
+        when(dcService.find(dcId)).thenReturn(new DcTbl().setId(1));
         when(clusterService.find(singleDcCacheCluster)).thenReturn(new ClusterTbl().setId(17730).setClusterName(singleDcCacheCluster).setActivedcId(1).setClusterType(ClusterType.SINGLE_DC.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(8));
         when(clusterService.find(localDcCacheCluster)).thenReturn(new ClusterTbl().setId(17728).setClusterName(localDcCacheCluster).setActivedcId(1).setClusterType(ClusterType.LOCAL_DC.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(9));
         dcMetaSynchronizer.sync();
@@ -330,7 +349,7 @@ public class DcMetaSynchronizerTest {
         verify(clusterService, never()).update(any());
 
         verify(consoleConfig, times(1)).supportSentinelHealthCheck(any(), any());
-        verify(sentinelBalanceService, never()).selectMultiDcSentinels(ClusterType.ONE_WAY);
+        verify(sentinelBalanceService, never()).selectMultiDcSentinels(ClusterType.ONE_WAY, "");
         verify(shardService, times(1)).findOrCreateShardIfNotExist(any(), any(), eq(null), any());
         verify(shardService, never()).deleteShard(any(), any());
 
@@ -342,7 +361,7 @@ public class DcMetaSynchronizerTest {
         when(consoleConfig.supportSentinelHealthCheck(any(),any())).thenReturn(true);
         dcMetaSynchronizer.sync();
         verify(consoleConfig, times(2)).supportSentinelHealthCheck(any(), any());
-        verify(sentinelBalanceService, times(1)).selectMultiDcSentinels(ClusterType.SINGLE_DC);
+        verify(sentinelBalanceService, times(1)).selectMultiDcSentinels(ClusterType.SINGLE_DC, "");
     }
 
     @Test
@@ -353,13 +372,13 @@ public class DcMetaSynchronizerTest {
         ));
 
         //        rm shard
-        OuterClientService.DcMeta credisDcMeta = credisDcMeta().setDcName(DcMetaSynchronizer.currentDcId);
+        OuterClientService.DcMeta credisDcMeta = credisDcMeta().setDcName(dcId);
         credisDcMeta.getClusters().get(singleDcCacheCluster).getGroups().clear();
 
         when(consoleConfig.getOuterClusterTypes()).thenReturn(Sets.newHashSet("SINGLE_DC", "LOCAL_DC"));
-        when(outerClientService.getOutClientDcMeta(DcMetaSynchronizer.currentDcId)).thenReturn(credisDcMeta);
-        when(metaCache.getXpipeMeta()).thenReturn(new XpipeMeta().addDc(xpipeDcMeta().setId(DcMetaSynchronizer.currentDcId)));
-        when(dcService.find(DcMetaSynchronizer.currentDcId)).thenReturn(new DcTbl().setId(1));
+        when(outerClientService.getOutClientDcMeta(dcId)).thenReturn(credisDcMeta);
+        when(metaCache.getXpipeMeta()).thenReturn(new XpipeMeta().addDc(xpipeDcMeta().setId(dcId)));
+        when(dcService.find(dcId)).thenReturn(new DcTbl().setId(1));
         when(clusterService.find(singleDcCacheCluster)).thenReturn(new ClusterTbl().setId(17730).setClusterName(singleDcCacheCluster).setActivedcId(1).setClusterType(ClusterType.SINGLE_DC.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(8));
         when(clusterService.find(localDcCacheCluster)).thenReturn(new ClusterTbl().setId(17728).setClusterName(localDcCacheCluster).setActivedcId(1).setClusterType(ClusterType.LOCAL_DC.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(9));
         dcMetaSynchronizer.sync();
@@ -385,16 +404,16 @@ public class DcMetaSynchronizerTest {
         ));
 
         //        add redis
-        OuterClientService.DcMeta credisDcMeta = credisDcMeta().setDcName(DcMetaSynchronizer.currentDcId);
+        OuterClientService.DcMeta credisDcMeta = credisDcMeta().setDcName(dcId);
         credisDcMeta.getClusters().get(singleDcCacheCluster).getGroups().get("credis_test_cluster_1_1").getRedises().add(new OuterClientService.RedisMeta().setHost("127.0.0.1").setPort(6379).setMaster(true));
 
         when(consoleConfig.getOuterClusterTypes()).thenReturn(Sets.newHashSet("SINGLE_DC", "LOCAL_DC"));
-        when(outerClientService.getOutClientDcMeta(DcMetaSynchronizer.currentDcId)).thenReturn(credisDcMeta);
-        when(metaCache.getXpipeMeta()).thenReturn(new XpipeMeta().addDc(xpipeDcMeta().setId(DcMetaSynchronizer.currentDcId)));
-        when(dcService.find(DcMetaSynchronizer.currentDcId)).thenReturn(new DcTbl().setId(1));
+        when(outerClientService.getOutClientDcMeta(dcId)).thenReturn(credisDcMeta);
+        when(metaCache.getXpipeMeta()).thenReturn(new XpipeMeta().addDc(xpipeDcMeta().setId(dcId)));
+        when(dcService.find(dcId)).thenReturn(new DcTbl().setId(1));
         when(clusterService.find(singleDcCacheCluster)).thenReturn(new ClusterTbl().setId(17730).setClusterName(singleDcCacheCluster).setActivedcId(1).setClusterType(ClusterType.SINGLE_DC.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(8));
         when(clusterService.find(localDcCacheCluster)).thenReturn(new ClusterTbl().setId(17728).setClusterName(localDcCacheCluster).setActivedcId(1).setClusterType(ClusterType.LOCAL_DC.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(9));
-        when(redisService.findRedisesByDcClusterShard(DcMetaSynchronizer.currentDcId,singleDcCacheCluster,"credis_test_cluster_1_1")).thenReturn(Lists.newArrayList(new RedisTbl().setRedisIp("127.0.0.1").setRedisPort(6379).setMaster(false)));
+        when(redisService.findRedisesByDcClusterShard(dcId,singleDcCacheCluster,"credis_test_cluster_1_1")).thenReturn(Lists.newArrayList(new RedisTbl().setRedisIp("127.0.0.1").setRedisPort(6379).setMaster(false)));
         dcMetaSynchronizer.sync();
 
         verify(clusterService, never()).bindDc(any());
@@ -419,13 +438,13 @@ public class DcMetaSynchronizerTest {
         ));
 
         //        add redis
-        OuterClientService.DcMeta credisDcMeta = credisDcMeta().setDcName(DcMetaSynchronizer.currentDcId);
+        OuterClientService.DcMeta credisDcMeta = credisDcMeta().setDcName(dcId);
         credisDcMeta.getClusters().get(singleDcCacheCluster).getGroups().get("credis_test_cluster_1_1").getRedises().clear();
 
         when(consoleConfig.getOuterClusterTypes()).thenReturn(Sets.newHashSet("SINGLE_DC", "LOCAL_DC"));
-        when(outerClientService.getOutClientDcMeta(DcMetaSynchronizer.currentDcId)).thenReturn(credisDcMeta);
-        when(metaCache.getXpipeMeta()).thenReturn(new XpipeMeta().addDc(xpipeDcMeta().setId(DcMetaSynchronizer.currentDcId)));
-        when(dcService.find(DcMetaSynchronizer.currentDcId)).thenReturn(new DcTbl().setId(1));
+        when(outerClientService.getOutClientDcMeta(dcId)).thenReturn(credisDcMeta);
+        when(metaCache.getXpipeMeta()).thenReturn(new XpipeMeta().addDc(xpipeDcMeta().setId(dcId)));
+        when(dcService.find(dcId)).thenReturn(new DcTbl().setId(1));
         when(clusterService.find(singleDcCacheCluster)).thenReturn(new ClusterTbl().setId(17730).setClusterName(singleDcCacheCluster).setActivedcId(1).setClusterType(ClusterType.SINGLE_DC.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(8));
         when(clusterService.find(localDcCacheCluster)).thenReturn(new ClusterTbl().setId(17728).setClusterName(localDcCacheCluster).setActivedcId(1).setClusterType(ClusterType.LOCAL_DC.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(9));
         dcMetaSynchronizer.sync();
@@ -453,7 +472,7 @@ public class DcMetaSynchronizerTest {
         ));
 
         //        change redis role
-        OuterClientService.DcMeta credisDcMeta = credisDcMeta().setDcName(DcMetaSynchronizer.currentDcId);
+        OuterClientService.DcMeta credisDcMeta = credisDcMeta().setDcName(dcId);
 
         List<RedisTbl> redisTbls = new ArrayList<>();
         List<OuterClientService.RedisMeta> redisMetaList = credisDcMeta.getClusters().get(singleDcCacheCluster).getGroups().get("credis_test_cluster_1_1").getRedises();
@@ -464,12 +483,12 @@ public class DcMetaSynchronizerTest {
 
 
         when(consoleConfig.getOuterClusterTypes()).thenReturn(Sets.newHashSet("SINGLE_DC", "LOCAL_DC"));
-        when(outerClientService.getOutClientDcMeta(DcMetaSynchronizer.currentDcId)).thenReturn(credisDcMeta);
-        when(metaCache.getXpipeMeta()).thenReturn(new XpipeMeta().addDc(xpipeDcMeta().setId(DcMetaSynchronizer.currentDcId)));
-        when(dcService.find(DcMetaSynchronizer.currentDcId)).thenReturn(new DcTbl().setId(1));
+        when(outerClientService.getOutClientDcMeta(dcId)).thenReturn(credisDcMeta);
+        when(metaCache.getXpipeMeta()).thenReturn(new XpipeMeta().addDc(xpipeDcMeta().setId(dcId)));
+        when(dcService.find(dcId)).thenReturn(new DcTbl().setId(1));
         when(clusterService.find(singleDcCacheCluster)).thenReturn(new ClusterTbl().setId(17730).setClusterName(singleDcCacheCluster).setActivedcId(1).setClusterType(ClusterType.SINGLE_DC.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(8));
         when(clusterService.find(localDcCacheCluster)).thenReturn(new ClusterTbl().setId(17728).setClusterName(localDcCacheCluster).setActivedcId(1).setClusterType(ClusterType.LOCAL_DC.name()).setClusterAdminEmails("test@ctrip.com").setClusterOrgId(9));
-        when(redisService.findRedisesByDcClusterShard(DcMetaSynchronizer.currentDcId, singleDcCacheCluster, "credis_test_cluster_1_1")).thenReturn(redisTbls);
+        when(redisService.findRedisesByDcClusterShard(dcId, singleDcCacheCluster, "credis_test_cluster_1_1")).thenReturn(redisTbls);
 
         dcMetaSynchronizer.sync();
 
@@ -489,19 +508,11 @@ public class DcMetaSynchronizerTest {
 
     @Test
     public void shouldFilterOuterClusterTest() {
-        when(consoleConfig.filterOuterClusters()).thenReturn(null);
-        dcMetaSynchronizer.buildFilterPattern();
 
         OuterClientService.ClusterMeta clusterMeta = new OuterClientService.ClusterMeta().setName("testCluster").setOperating(false);
         Assert.assertFalse(dcMetaSynchronizer.shouldFilterOuterCluster(clusterMeta));
         Assert.assertFalse(dcMetaSynchronizer.shouldFilterOuterCluster(clusterMeta.setName("AddServCache_v202111011735")));
         Assert.assertFalse(dcMetaSynchronizer.shouldFilterOuterCluster(clusterMeta.setName("Ai_AdSystem_Cache_temp202103041704")));
-        Assert.assertFalse(dcMetaSynchronizer.shouldFilterOuterCluster(clusterMeta.setName("Ai_AdSystem_Cache_v2")));
-
-        when(consoleConfig.filterOuterClusters()).thenReturn("_[v|temp]+[0-9]{8,}?");
-        dcMetaSynchronizer.buildFilterPattern();
-        Assert.assertTrue(dcMetaSynchronizer.shouldFilterOuterCluster(clusterMeta.setName("AddServCache_v202111011735")));
-        Assert.assertTrue(dcMetaSynchronizer.shouldFilterOuterCluster(clusterMeta.setName("Ai_AdSystem_Cache_temp202103041704")));
         Assert.assertFalse(dcMetaSynchronizer.shouldFilterOuterCluster(clusterMeta.setName("Ai_AdSystem_Cache_v2")));
 
         clusterMeta.setOperating(true);
@@ -548,7 +559,8 @@ public class DcMetaSynchronizerTest {
     }
 
     OuterClientService.DcMeta credisDcMeta() {
-        return JsonUtil.fromJson(JsonUtil.credisMetaString, OuterClientService.DcMeta.class);
+        OuterClientService.DcMeta  res = JsonUtil.fromJson(JsonUtil.credisMetaString, OuterClientService.DcMeta.class);
+        return res;
     }
 
     DcMeta xpipeDcMeta() {

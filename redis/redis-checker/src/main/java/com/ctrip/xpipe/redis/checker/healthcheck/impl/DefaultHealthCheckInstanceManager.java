@@ -1,10 +1,11 @@
 package com.ctrip.xpipe.redis.checker.healthcheck.impl;
 
+import com.ctrip.xpipe.api.foundation.FoundationService;
+import com.ctrip.xpipe.api.monitor.EventMonitor;
+import com.ctrip.xpipe.cluster.ClusterType;
 import com.ctrip.xpipe.endpoint.HostPort;
 import com.ctrip.xpipe.redis.checker.healthcheck.*;
-import com.ctrip.xpipe.redis.core.entity.ClusterMeta;
-import com.ctrip.xpipe.redis.core.entity.KeeperMeta;
-import com.ctrip.xpipe.redis.core.entity.RedisMeta;
+import com.ctrip.xpipe.redis.core.entity.*;
 import com.ctrip.xpipe.utils.MapUtils;
 import com.ctrip.xpipe.utils.StringUtil;
 import com.google.common.collect.Lists;
@@ -14,7 +15,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.ConcurrentMap;
 
 /**
@@ -31,9 +32,9 @@ public class DefaultHealthCheckInstanceManager implements HealthCheckInstanceMan
 
     private ConcurrentMap<String, ClusterHealthCheckInstance> clusterHealthCheckerInstances = Maps.newConcurrentMap();
 
-    private ConcurrentMap<HostPort, KeeperHealthCheckInstance> keeperInstances = Maps.newConcurrentMap();
+    private ConcurrentMap<HostPort, RedisHealthCheckInstance> redisInstanceForPingAction = Maps.newConcurrentMap();
 
-    private ConcurrentMap<HostPort, RedisHealthCheckInstance> redisInstanceForAssignedAction = Maps.newConcurrentMap();
+    private static final String ALERT_TYPE = "HealthCheckInstance";
 
     @Autowired
     private HealthCheckInstanceFactory instanceFactory;
@@ -44,30 +45,19 @@ public class DefaultHealthCheckInstanceManager implements HealthCheckInstanceMan
             HostPort key = new HostPort(redis.getIp(), redis.getPort());
             return MapUtils.getOrCreate(instances, key, () -> instanceFactory.create(redis));
         } catch (Throwable th) {
-            logger.error("getOrCreate health check instance:{}:{}", redis.getIp(), redis.getPort());
+            logger.error("getOrCreate health check instance:{}:{}", redis.getIp(), redis.getPort(), th);
         }
         return null;
     }
 
     @Override
-    public RedisHealthCheckInstance getOrCreateRedisInstanceForAssignedAction(RedisMeta redis) {
+    public RedisHealthCheckInstance getOrCreateRedisInstanceForPsubPingAction(RedisMeta redis) {
         try {
             HostPort key = new HostPort(redis.getIp(), redis.getPort());
-            return MapUtils.getOrCreate(redisInstanceForAssignedAction, key,
-                    () -> instanceFactory.createRedisInstanceForAssignedAction(redis));
+            return MapUtils.getOrCreate(redisInstanceForPingAction, key,
+                    () -> instanceFactory.getOrCreateRedisInstanceForPsubPingAction(redis));
         } catch (Throwable th) {
-            logger.error("getOrCreate health check redis instance:{}:{}", redis.getIp(), redis.getPort());
-        }
-        return null;
-    }
-
-    @Override
-    public KeeperHealthCheckInstance getOrCreate(KeeperMeta keeper) {
-        try {
-            HostPort key = new HostPort(keeper.getIp(), keeper.getPort());
-            return MapUtils.getOrCreate(keeperInstances, key, () -> instanceFactory.create(keeper));
-        } catch (Throwable th) {
-            logger.error("getOrCreate health check keeper instance:{}:{}", keeper.getIp(), keeper.getPort());
+            logger.error("getOrCreate ping action health check redis instance:{}:{}", redis.getIp(), redis.getPort(), th);
         }
         return null;
     }
@@ -78,7 +68,7 @@ public class DefaultHealthCheckInstanceManager implements HealthCheckInstanceMan
             String key = cluster.getId().toLowerCase();
             return MapUtils.getOrCreate(clusterHealthCheckerInstances, key, () -> instanceFactory.create(cluster));
         } catch (Throwable th) {
-            logger.error("getOrCreate health check cluster:{}", cluster.getId());
+            logger.error("getOrCreate health check cluster:{}", cluster.getId(), th);
         }
         return null;
     }
@@ -89,13 +79,8 @@ public class DefaultHealthCheckInstanceManager implements HealthCheckInstanceMan
     }
 
     @Override
-    public RedisHealthCheckInstance findRedisInstanceForAssignedAction(HostPort hostPort) {
-        return redisInstanceForAssignedAction.get(hostPort);
-    }
-
-    @Override
-    public KeeperHealthCheckInstance findKeeperHealthCheckInstance(HostPort hostPort) {
-        return keeperInstances.get(hostPort);
+    public RedisHealthCheckInstance findRedisInstanceForPsubPingAction(HostPort hostPort) {
+        return redisInstanceForPingAction.get(hostPort);
     }
 
     @Override
@@ -112,15 +97,8 @@ public class DefaultHealthCheckInstanceManager implements HealthCheckInstanceMan
     }
 
     @Override
-    public KeeperHealthCheckInstance removeKeeper(HostPort hostPort) {
-        KeeperHealthCheckInstance instance = keeperInstances.remove(hostPort);
-        if (null != instance) instanceFactory.remove(instance);
-        return instance;
-    }
-
-    @Override
-    public RedisHealthCheckInstance removeRedisInstanceForAssignedAction(HostPort hostPort) {
-        RedisHealthCheckInstance instance = redisInstanceForAssignedAction.remove(hostPort);
+    public RedisHealthCheckInstance removeRedisInstanceForPingAction(HostPort hostPort) {
+        RedisHealthCheckInstance instance = redisInstanceForPingAction.remove(hostPort);
         if (null != instance) instanceFactory.remove(instance);
         return instance;
     }
@@ -139,18 +117,92 @@ public class DefaultHealthCheckInstanceManager implements HealthCheckInstanceMan
     }
 
     @Override
-    public List<KeeperHealthCheckInstance> getAllKeeperInstance() {
-        return Lists.newLinkedList(keeperInstances.values());
-    }
-
-    @Override
-    public List<RedisHealthCheckInstance> getAllRedisInstanceForAssignedAction() {
-        return Lists.newLinkedList(redisInstanceForAssignedAction.values());
-    }
-
-    @Override
     public List<ClusterHealthCheckInstance> getAllClusterInstance() {
         return Lists.newLinkedList(clusterHealthCheckerInstances.values());
+    }
+
+    public boolean checkInstancesMiss(XpipeMeta xpipeMeta) {
+        if (null == xpipeMeta) return true;
+
+        logger.debug("[checkInstancesMiss][begin]");
+        Set<String> currentClusters = clusterHealthCheckerInstances.keySet();
+        Set<HostPort> currentInstances = instances.keySet();
+        Set<HostPort> currentPingInstances = redisInstanceForPingAction.keySet();
+
+        Set<String> expectClusters = new HashSet<>();
+        Set<HostPort> expectInstances = new HashSet<>();
+        Set<HostPort> expectPingInstances = new HashSet<>();
+
+        String currentDc = FoundationService.DEFAULT.getDataCenter();
+        String currentZone = xpipeMeta.getDcs().get(currentDc).getZone();
+        for (Map.Entry<String, DcMeta> entry: xpipeMeta.getDcs().entrySet()) {
+            String dcId = entry.getKey();
+            DcMeta dcMeta = entry.getValue();
+            for (ClusterMeta clusterMeta: dcMeta.getClusters().values()) {
+                ClusterType clusterType = ClusterType.lookup(clusterMeta.getType());
+                String clusterId = clusterMeta.getId().toLowerCase();
+                boolean addInstanceForPing = false;
+                if (clusterType.equals(ClusterType.ONE_WAY)) {
+                    String activeDc = clusterMeta.getActiveDc();
+                    if (activeDc.equalsIgnoreCase(currentDc)) {
+                        expectClusters.add(clusterId);
+                    } else if (dcId.equalsIgnoreCase(currentDc) && !currentZone.equalsIgnoreCase(xpipeMeta.getDcs().get(activeDc).getZone())) {
+                        addInstanceForPing = true;
+                    } else {
+                        continue;
+                    }
+                } else if (clusterType.supportSingleActiveDC() || clusterType.equals(ClusterType.CROSS_DC)) {
+                    String activeDc = clusterMeta.getActiveDc();
+                    if (activeDc.equalsIgnoreCase(currentDc)) {
+                        expectClusters.add(clusterId);
+                    } else {
+                        continue;
+                    }
+                } else if (!expectClusters.contains(clusterId)) {
+                    String[] dcs = clusterMeta.getDcs().split("\\s*,\\s*");
+                    for (String dc : dcs) {
+                        if (dc.equalsIgnoreCase(currentDc)) expectClusters.add(clusterId);
+                    }
+
+                    if (!expectClusters.contains(clusterId)) continue;
+                }
+
+                for (ShardMeta shardMeta: clusterMeta.getShards().values()) {
+                    for (RedisMeta redisMeta: shardMeta.getRedises()) {
+                        if (addInstanceForPing) {
+                            expectPingInstances.add(new HostPort(redisMeta.getIp(), redisMeta.getPort()));
+                        } else {
+                            expectInstances.add(new HostPort(redisMeta.getIp(), redisMeta.getPort()));
+                        }
+                    }
+                }
+            }
+        }
+
+        boolean noMissing = true;
+        if (!currentClusters.equals(expectClusters)) {
+            noMissing = false;
+            logger.debug("[checkInstancesMiss][cluster][current] {}", currentClusters);
+            logger.debug("[checkInstancesMiss][cluster][expect] {}", expectClusters);
+            EventMonitor.DEFAULT.logEvent(ALERT_TYPE, "clusterMissing");
+        }
+        if (!currentInstances.equals(expectInstances)) {
+            noMissing = false;
+            logger.debug("[checkInstancesMiss][instance][current] {}", currentInstances);
+            logger.debug("[checkInstancesMiss][instance][expect] {}", expectInstances);
+            EventMonitor.DEFAULT.logEvent(ALERT_TYPE, "instanceMissing");
+        }
+        if (!currentPingInstances.equals(expectPingInstances)) {
+            noMissing = false;
+            logger.debug("[checkInstancesMiss][CrossRegionInstance][current] {}", currentPingInstances);
+            logger.debug("[checkInstancesMiss][CrossRegionInstance][expect] {}", expectPingInstances);
+            EventMonitor.DEFAULT.logEvent(ALERT_TYPE, "CrossRegionInstanceMissing");
+        }
+        if (noMissing) {
+            EventMonitor.DEFAULT.logEvent(ALERT_TYPE, "noMissing");
+        }
+
+        return noMissing;
     }
 
 }

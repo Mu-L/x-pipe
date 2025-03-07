@@ -6,7 +6,7 @@ import com.ctrip.xpipe.endpoint.DefaultEndPoint;
 import com.ctrip.xpipe.gtid.GtidSet;
 import com.ctrip.xpipe.redis.core.entity.KeeperMeta;
 import com.ctrip.xpipe.redis.core.protocal.MASTER_STATE;
-import com.ctrip.xpipe.redis.core.protocal.XsyncObserver;
+import com.ctrip.xpipe.redis.core.protocal.SyncObserver;
 import com.ctrip.xpipe.redis.core.protocal.cmd.DefaultXsync;
 import com.ctrip.xpipe.redis.core.protocal.protocal.EofType;
 import com.ctrip.xpipe.redis.core.redis.operation.RedisOp;
@@ -16,11 +16,14 @@ import com.ctrip.xpipe.redis.core.server.FakeRedisServer;
 import com.ctrip.xpipe.redis.core.store.ReplicationStore;
 import com.ctrip.xpipe.redis.keeper.AbstractFakeRedisTest;
 import com.ctrip.xpipe.redis.keeper.config.KeeperConfig;
+import com.ctrip.xpipe.redis.keeper.config.ReplDelayConfigCache;
+import com.ctrip.xpipe.redis.keeper.ratelimit.SyncRateManager;
 import io.netty.buffer.ByteBuf;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
+import org.mockito.Mockito;
 
 import java.util.Arrays;
 import java.util.LinkedList;
@@ -30,7 +33,7 @@ import java.util.List;
  * @author lishanglin
  * date 2022/5/25
  */
-public class GtidRedisKeeperServerTest extends AbstractFakeRedisTest implements XsyncObserver {
+public class GtidRedisKeeperServerTest extends AbstractFakeRedisTest implements SyncObserver {
 
     private FakeRedisServer fakeRedisServer;
 
@@ -57,7 +60,7 @@ public class GtidRedisKeeperServerTest extends AbstractFakeRedisTest implements 
         KeeperMeta keeperMeta = createKeeperMeta();
         DefaultRedisKeeperServer keeperServer = new DefaultRedisKeeperServer(getReplId().id(), keeperMeta, keeperConfig,
                 getReplicationStoreManagerBaseDir(keeperMeta), getRegistry().getComponent(LeaderElectorManager.class),
-                createkeepersMonitorManager(), getResourceManager(), parser);
+                createkeepersMonitorManager(), getResourceManager(), Mockito.mock(SyncRateManager.class), parser, new ReplDelayConfigCache());
         keeperServer.initialize();
         keeperServer.start();
 
@@ -73,7 +76,7 @@ public class GtidRedisKeeperServerTest extends AbstractFakeRedisTest implements 
         waitConditionUntilTimeOut(() -> replicationStore.getEndOffset() > 50);
         logger.info("[testPsyncAndXsync] {}", replicationStore.getEndGtidSet());
         DefaultXsync xsync = new DefaultXsync("127.0.0.1", keeperServer.getListeningPort(), new GtidSet("a1:0"), null, scheduled);
-        xsync.addXsyncObserver(this);
+        xsync.addSyncObserver(this);
         xsync.execute(executors);
 
         waitConditionUntilTimeOut(() -> 5 == redisOps.size());

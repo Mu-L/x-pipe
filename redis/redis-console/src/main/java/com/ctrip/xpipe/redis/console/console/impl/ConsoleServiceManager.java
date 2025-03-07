@@ -7,15 +7,18 @@ import com.ctrip.xpipe.redis.checker.RemoteCheckerManager;
 import com.ctrip.xpipe.redis.checker.controller.result.ActionContextRetMessage;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.interaction.HEALTH_STATE;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.interaction.HealthStatusDesc;
+import com.ctrip.xpipe.redis.console.cluster.ConsoleLeaderElector;
 import com.ctrip.xpipe.redis.console.config.ConsoleConfig;
 import com.ctrip.xpipe.redis.console.console.ConsoleService;
+import com.ctrip.xpipe.redis.core.metaserver.model.ShardAllMetaModel;
+import com.ctrip.xpipe.redis.console.healthcheck.fulllink.model.ShardCheckerHealthCheckModel;
 import com.ctrip.xpipe.redis.console.model.consoleportal.UnhealthyInfoModel;
 import com.ctrip.xpipe.tuple.Pair;
-import com.ctrip.xpipe.utils.StringUtil;
 import com.google.common.collect.Maps;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
@@ -37,13 +40,12 @@ public class ConsoleServiceManager implements RemoteCheckerManager {
 
     private ConsoleConfig consoleConfig;
 
+    private ConsoleLeaderElector leaderElector;
+
     @Autowired
-    public ConsoleServiceManager(ConsoleConfig consoleConfig) {
+    public ConsoleServiceManager(ConsoleConfig consoleConfig, @Nullable ConsoleLeaderElector leaderElector) {
         this.consoleConfig = consoleConfig;
-        String parallelConsoleDomain = consoleConfig.getParallelConsoleDomain();
-        if (!StringUtil.isEmpty(parallelConsoleDomain)) {
-            parallelService = new DefaultConsoleService(parallelConsoleDomain);
-        }
+        this.leaderElector = leaderElector;
     }
 
     @Override
@@ -85,9 +87,24 @@ public class ConsoleServiceManager implements RemoteCheckerManager {
         return new ArrayList<>(loadAllConsoleServices().values());
     }
 
+    public List<ShardCheckerHealthCheckModel> getShardAllCheckerGroupHealthCheck(String activeDc, String dcId, String clusterId, String shardId) {
+        ConsoleService service = getServiceByDc(activeDc);
+        return service.getShardAllCheckerGroupHealthCheck(dcId, clusterId, shardId);
+    }
+
+    public ShardAllMetaModel getShardAllMeta(String dcId, String clusterId, String shardId) {
+        ConsoleService service = getServiceByDc(dcId);
+        return service.getShardAllMeta(dcId, clusterId, shardId);
+    }
+
     public long getDelay(String ip, int port, String activeIdc) {
         ConsoleService service = getServiceByDc(activeIdc);
         return service.getInstanceDelayStatus(ip, port);
+    }
+
+    public Map<HostPort, Long> getDelay(List<HostPort> hostPorts, String activeIdc) {
+        ConsoleService service = getServiceByDc(activeIdc);
+        return service.getInstancesDelayStatus(hostPorts);
     }
 
     public long getShardDelay(long shardId, String activeIdc) {
@@ -202,17 +219,15 @@ public class ConsoleServiceManager implements RemoteCheckerManager {
 
     private Set<String>  getConsoleUrls(){
 
-        String allConsoles = consoleConfig.getAllConsoles();
-
         Set<String> consoleUrls = new HashSet<>();
-        for(String sp : allConsoles.split("\\s*,\\s*")){
-
-            if(StringUtil.isEmpty(sp)){
-                continue;
-            }
-            consoleUrls.add(sp);
+        String port = System.getProperty("server.port", "8080");
+        if(leaderElector != null) {
+           List<String> servers = leaderElector.getAllServers();
+           for(String server : servers){
+               consoleUrls.add(server + ":" + port);
+           }
         }
-        logger.debug("{}", consoleUrls);
+
         return consoleUrls;
     }
 }

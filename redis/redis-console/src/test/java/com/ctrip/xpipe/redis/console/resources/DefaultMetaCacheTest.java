@@ -15,7 +15,6 @@ import com.ctrip.xpipe.redis.core.meta.impl.DefaultXpipeMetaManager;
 import com.ctrip.xpipe.redis.core.route.RouteChooseStrategyFactory;
 import com.ctrip.xpipe.redis.core.util.SentinelUtil;
 import com.ctrip.xpipe.tuple.Pair;
-import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import org.junit.Assert;
@@ -24,7 +23,9 @@ import org.junit.Test;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.unidal.tuple.Triple;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -90,7 +91,7 @@ public class DefaultMetaCacheTest extends AbstractRedisTest {
         XpipeMetaManager xpipeMetaManager = mock(XpipeMetaManager.class);
         when(xpipeMetaManager.findMetaDesc(hostPort)).thenReturn(null);
         metaCache.setMeta(new Pair<>(mock(XpipeMeta.class), xpipeMetaManager));
-        metaCache.getRoutes();
+        metaCache.getCurrentDcConsoleRoutes();
     }
 
     @Test
@@ -144,6 +145,36 @@ public class DefaultMetaCacheTest extends AbstractRedisTest {
     }
 
     @Test
+    public void testDivideKeeperAndCluster() {
+        when(consoleConfig.getClusterDividedParts()).thenReturn(3);
+
+        metaCache.refreshMetaParts(metaCache.getXpipeMeta());
+
+        Set<HostPort> allKeepers = new HashSet<>();
+        Set<Long> allCluster = new HashSet<>();
+        XpipeMeta meta = metaCache.getDividedXpipeMeta(0);
+
+        for(DcMeta dcMeta : meta.getDcs().values()) {
+            for(KeeperContainerMeta keeperContainerMeta : dcMeta.getKeeperContainers()) {
+                allKeepers.add(new HostPort(keeperContainerMeta.getIp(), keeperContainerMeta.getPort()));
+            }
+            for(ClusterMeta clusterMeta : dcMeta.getClusters().values()) {
+                allCluster.add(clusterMeta.getDbId());
+            }
+        }
+
+        Assert.assertEquals(1, allKeepers.size());
+        Assert.assertEquals(Sets.newHashSet(new HostPort("1.1.1.3", 8080)), allKeepers);
+
+        Assert.assertEquals(1, allCluster.size());
+        Assert.assertEquals(3, allCluster.stream().findFirst().get().intValue());
+
+
+    }
+
+
+
+    @Test
     public void testGetAllKeeperContainersDcMap() {
         Map<String, String> allKeeperContainersDcMap = metaCache.getAllKeeperContainersDcMap();
         Assert.assertEquals("jq", allKeeperContainersDcMap.get("1.1.1.1"));
@@ -168,16 +199,26 @@ public class DefaultMetaCacheTest extends AbstractRedisTest {
     public void testFindBiClusterShardBySentinelMonitor() {
         String monitorNameOY = SentinelUtil.getSentinelMonitorName("cluster3", "shard1", "oy");
         String monitorNameJQ = SentinelUtil.getSentinelMonitorName("cluster3", "shard1", "jq");
-        Assert.assertEquals(Pair.of("cluster3", "shard1"), metaCache.findClusterShardBySentinelMonitor(monitorNameOY));
-        Assert.assertEquals(Pair.of("cluster3", "shard1"), metaCache.findClusterShardBySentinelMonitor(monitorNameJQ));
+        Triple<String, String, Long> clusterAndShardOY = metaCache.findClusterShardBySentinelMonitor(monitorNameOY);
+        Assert.assertEquals("cluster3", clusterAndShardOY.getFirst());
+        Assert.assertEquals("shard1", clusterAndShardOY.getMiddle());
+
+        Triple<String, String, Long> clusterAndShardJQ = metaCache.findClusterShardBySentinelMonitor(monitorNameJQ);
+        Assert.assertEquals("cluster3", clusterAndShardJQ.getFirst());
+        Assert.assertEquals("shard1", clusterAndShardJQ.getMiddle());
     }
 
     @Test
     public void testFindOneWayClusterShardBySentinelMonitor() {
         String monitorNameOY = SentinelUtil.getSentinelMonitorName("cluster1", "shard1", "oy");
         String monitorNameJQ = SentinelUtil.getSentinelMonitorName("cluster1", "shard1", "jq");
-        Assert.assertNull(metaCache.findClusterShardBySentinelMonitor(monitorNameOY));
-        Assert.assertEquals(Pair.of("cluster1", "shard1"), metaCache.findClusterShardBySentinelMonitor(monitorNameJQ));
+
+        Triple<String, String, Long> clusterAndShardOY = metaCache.findClusterShardBySentinelMonitor(monitorNameOY);
+        Assert.assertNull(clusterAndShardOY);
+
+        Triple<String, String, Long> clusterAndShardJQ = metaCache.findClusterShardBySentinelMonitor(monitorNameJQ);
+        Assert.assertEquals("cluster1", clusterAndShardJQ.getFirst());
+        Assert.assertEquals("shard1", clusterAndShardJQ.getMiddle());
     }
 
     @Test
@@ -233,12 +274,6 @@ public class DefaultMetaCacheTest extends AbstractRedisTest {
         metaCache.setActiveDcForCrossDcClusters(xpipeMeta);
         Assert.assertEquals("jq", oyCluster.getActiveDc());
         Assert.assertEquals("jq", jqCluster.getActiveDc());
-    }
-
-    @Test
-    public void testChooseRoute() {
-        when(consoleConfig.getChooseRouteStrategyType()).thenReturn(RouteChooseStrategyFactory.RouteStrategyType.CRC32_HASH.name());
-        metaCache.chooseRoutes("cluster1", "fra", Lists.newArrayList("jq"), 1);
     }
 
     @Test
@@ -319,6 +354,14 @@ public class DefaultMetaCacheTest extends AbstractRedisTest {
         } catch (Throwable th) {
             Assert.fail();
         }
+    }
+
+    @Test
+    public void testClusterDnCnt() {
+        Map<String, Integer> cntMap = metaCache.getClusterCntMap("cluster1");
+        Assert.assertEquals(cntMap.size(), 2);
+        Assert.assertEquals(cntMap.get("jq").intValue(), 3);
+        Assert.assertEquals(cntMap.get("oy").intValue(), 2);
     }
 
     protected String getXpipeMetaConfigFile() {

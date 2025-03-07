@@ -1,6 +1,7 @@
 package com.ctrip.xpipe.redis.console.service.impl;
 
 import com.ctrip.xpipe.cluster.ClusterType;
+import com.ctrip.xpipe.exception.XpipeRuntimeException;
 import com.ctrip.xpipe.redis.console.cache.AzGroupCache;
 import com.ctrip.xpipe.redis.console.config.ConsoleConfig;
 import com.ctrip.xpipe.redis.console.dao.ClusterDao;
@@ -40,6 +41,7 @@ import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.stream.Collectors;
 
+import static com.ctrip.xpipe.redis.console.service.impl.ClusterServiceImpl.CLUSTER_DEFAULT_TAG;
 import static com.ctrip.xpipe.spring.AbstractSpringConfigContext.GLOBAL_EXECUTOR;
 
 @Service
@@ -142,6 +144,52 @@ public class ShardServiceImpl extends AbstractConsoleService<ShardTblDao> implem
     	});
 	}
 
+	@Override
+	public List<ShardListModel> findAllByShardName(String shardName) {
+		List<ShardTbl> shardTbls = queryHandler.handleQuery(new DalQuery<List<ShardTbl>>() {
+			@Override
+			public List<ShardTbl> doQuery() throws DalException {
+				return dao.findAllByShardName(shardName, ShardTblEntity.READSET_FULL);
+			}
+		});
+		if (shardTbls == null || shardTbls.isEmpty()) throw new XpipeRuntimeException("Shard: " + shardName + " not found");
+		List<ShardListModel> shardListModels = new ArrayList<>();
+		shardTbls.forEach(shardTbl -> {
+			ClusterTbl cluster = clusterService.find(shardTbl.getClusterId());
+			if (cluster == null) throw new XpipeRuntimeException("ClusterId: " + shardTbl.getClusterId() + " not found");
+			shardListModels.add((ShardListModel) new ShardListModel().setShardName(shardTbl.getShardName())
+					.setShardId(shardTbl.getId())
+					.setActivedcId(cluster.getActivedcId())
+					.setClusterType(cluster.getClusterType())
+					.setClusterName(cluster.getClusterName())
+					.setClusterAdminEmails(cluster.getClusterAdminEmails())
+					.setClusterOrgName(cluster.getClusterOrgName())
+					.setClusterDescription(cluster.getClusterDescription()));
+		});
+		return shardListModels;
+	}
+
+	@Override
+	public ShardListModel findByReplId(long replId) {
+
+		ShardTbl shardTbl = queryHandler.handleQuery(new DalQuery<ShardTbl>() {
+			@Override
+			public ShardTbl doQuery() throws DalException {
+				return dao.findAllById(replId, ShardTblEntity.READSET_FULL);
+			}
+		});
+		if (shardTbl == null) throw new XpipeRuntimeException("Shard: " + replId + " not found");
+		ClusterTbl cluster = clusterService.find(shardTbl.getClusterId());
+		return (ShardListModel) new ShardListModel().setShardName(shardTbl.getShardName())
+				.setShardId(shardTbl.getId())
+				.setActivedcId(cluster.getActivedcId())
+				.setClusterType(cluster.getClusterType())
+				.setClusterName(cluster.getClusterName())
+				.setClusterAdminEmails(cluster.getClusterAdminEmails())
+				.setClusterOrgName(cluster.getClusterOrgName())
+				.setClusterDescription(cluster.getClusterDescription());
+	}
+
 	private DcClusterShardTbl generateDcClusterShardTbl(ClusterTbl clusterTbl, DcClusterTbl dcClusterTbl,
 		long shardId, Map<Long, SentinelGroupModel> sentinels) {
 		DcClusterShardTbl dcClusterShardTbl = new DcClusterShardTbl();
@@ -227,7 +275,7 @@ public class ShardServiceImpl extends AbstractConsoleService<ShardTblDao> implem
 				String azGroupType = StringUtil.isEmpty(azGroupCluster.getAzGroupClusterType()) ?
 					cluster.getClusterType() : azGroupCluster.getAzGroupClusterType();
 				Map<Long, SentinelGroupModel> sentinelModelMap =
-					sentinelBalanceService.selectMultiDcSentinels(ClusterType.lookup(azGroupType));
+					sentinelBalanceService.selectMultiDcSentinels(ClusterType.lookup(azGroupType), CLUSTER_DEFAULT_TAG);
 
 				List<DcClusterEntity> regionDcClusters = azGroupClusterId2DcClustersMap.get(azGroupCluster.getId());
 				for (DcClusterEntity dcCluster : regionDcClusters) {

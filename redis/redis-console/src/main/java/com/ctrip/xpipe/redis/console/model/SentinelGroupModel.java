@@ -5,19 +5,25 @@ import org.apache.commons.lang.StringUtils;
 import java.util.*;
 import java.util.stream.Collectors;
 
+import static com.ctrip.xpipe.redis.console.service.impl.ClusterServiceImpl.CLUSTER_DEFAULT_TAG;
+
 public class SentinelGroupModel {
 
     private long sentinelGroupId;
+    private String tag = CLUSTER_DEFAULT_TAG;
     private List<SentinelInstanceModel> sentinels = new ArrayList<>();
     private String clusterType;
     private String desc = "";
     private int shardCount;
+    private int active = 1;
 
     public SentinelGroupModel() {}
 
     public SentinelGroupModel(SentinelGroupTbl sentinelGroupTbl) {
         this.sentinelGroupId = sentinelGroupTbl.getSentinelGroupId();
         this.clusterType = sentinelGroupTbl.getClusterType();
+        this.active = sentinelGroupTbl.getActive();
+        this.tag = sentinelGroupTbl.getTag();
     }
 
     public long getSentinelGroupId() {
@@ -26,6 +32,15 @@ public class SentinelGroupModel {
 
     public SentinelGroupModel setSentinelGroupId(long sentinelGroupId) {
         this.sentinelGroupId = sentinelGroupId;
+        return this;
+    }
+
+    public String getTag() {
+        return tag;
+    }
+
+    public SentinelGroupModel setTag(String tag) {
+        this.tag = tag;
         return this;
     }
 
@@ -81,6 +96,19 @@ public class SentinelGroupModel {
         return dcInfos;
     }
 
+    public boolean isActive() {
+        return active == 1;
+    }
+
+    public SentinelGroupModel setActive(int active) {
+        this.active = active;
+        return this;
+    }
+
+    public int getActive() {
+        return active;
+    }
+
     public String getDesc() {
         return desc;
     }
@@ -96,6 +124,7 @@ public class SentinelGroupModel {
                 ", sentinels=" + sentinels +
                 ", clusterType='" + clusterType + '\'' +
                 ", shardCount=" + shardCount +
+                ", active=" + active+
                 '}';
     }
 }

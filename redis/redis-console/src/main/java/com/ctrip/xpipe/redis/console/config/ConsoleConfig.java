@@ -2,9 +2,7 @@ package com.ctrip.xpipe.redis.console.config;
 
 import com.ctrip.xpipe.redis.checker.alert.AlertConfig;
 import com.ctrip.xpipe.redis.checker.config.CheckerConfig;
-import com.ctrip.xpipe.redis.checker.healthcheck.actions.interaction.DcClusterDelayMarkDown;
 import com.ctrip.xpipe.redis.console.config.model.BeaconOrgRoute;
-import com.ctrip.xpipe.redis.console.model.KeeperContainerOverloadStandardModel;
 import com.ctrip.xpipe.redis.console.util.HickwallMetricInfo;
 import com.ctrip.xpipe.redis.core.config.CoreConfig;
 import com.ctrip.xpipe.redis.core.meta.QuorumConfig;
@@ -22,19 +20,19 @@ import java.util.Set;
 public interface ConsoleConfig extends CoreConfig, CheckerConfig, AlertConfig {
 
 	String getServerMode();
-	
+
 	String getDatasource();
-	
+
 	int getConsoleNotifyRetryTimes();
-	
+
 	int getConsoleNotifyRetryInterval();
 
 	Map<String,String> getMetaservers();
-	
+
 	int getConsoleNotifyThreads();
 
 	Set<String> getConsoleUserAccessWhiteList();
-	
+
 	int getRedisReplicationHealthCheckInterval();
 
 	int getClusterHealthCheckInterval();
@@ -54,8 +52,6 @@ public interface ConsoleConfig extends CoreConfig, CheckerConfig, AlertConfig {
 	int getCacheRefreshInterval();
 
 	Set<String> getAlertWhileList();
-
-	String getAllConsoles();
 
 	int getQuorum();
 
@@ -95,13 +91,9 @@ public interface ConsoleConfig extends CoreConfig, CheckerConfig, AlertConfig {
 
 	Set<String> getIgnoredHealthCheckDc();
 
-	Set<DcClusterDelayMarkDown> getDelayedMarkDownDcClusters();
-
 	int getPingDownAfterMilli();
 
 	int getPingDownAfterMilliThroughProxy();
-
-	Map<String, String> getSocketStatsAnalyzingKeys();
 
 	Pair<String, String> getClusterShardForMigrationSysCheck();
 
@@ -112,8 +104,6 @@ public interface ConsoleConfig extends CoreConfig, CheckerConfig, AlertConfig {
 	int getOuterClientSyncInterval();
 
 	String getOuterClientToken();
-
-	String filterOuterClusters();
 
 	Map<String, String> getConsoleDomains();
 
@@ -129,55 +119,21 @@ public interface ConsoleConfig extends CoreConfig, CheckerConfig, AlertConfig {
 
 	String getCrossDcLeaderLeaseName();
 
-	boolean isSensitiveForRedundantRedis();
-
-	String getParallelConsoleDomain();
-
-	String getDefaultBeaconHost();
-
-	Map<Long, String> getBeaconHosts();
-
 	List<BeaconOrgRoute> getBeaconOrgRoutes();
 
 	int getClusterDividedParts();
 
 	int getCheckerAckTimeoutMilli();
 
-    long getMigrationTimeoutMilli();
+	long getMigrationTimeoutMilli();
 
 	long getServletMethodTimeoutMilli();
-	
+
 	boolean isRedisConfigCheckMonitorOpen();
 
 	String getRedisConfigCheckRules();
 
-	Set<String> getClustersSupportBiMigration();
-
-	String getBeaconSupportZone();
-
-	String getBiDirectionMigrationDcPriority();
-
 	String getChooseRouteStrategyType();
-
-	int monitorUnregisterProtectCount();
-
-	boolean isMigrationProcessReportOpen();
-
-	String getBreakDownDc();
-
-	String getKeyMigrationProcessReportUrl();
-
-    String getKeyMigrationResultReportUrl();
-
-    String getKeyMigrationResultReportToken();
-
-	boolean isMigrationResultReportOpen();
-
-	int getKeyMigrationResultReportRetryTimes();
-
-    long getMigrationProcessReportIntervalMill();
-
-	long getMigrationResultReportIntervalMill();
 
 	boolean isAutoMigrateOverloadKeeperContainerOpen();
 
@@ -188,4 +144,21 @@ public interface ConsoleConfig extends CoreConfig, CheckerConfig, AlertConfig {
 	double getKeeperContainerDiskOverLoadFactor();
 
 	double getKeeperContainerIoRate();
+
+	long getMetaServerSlotClusterMapCacheTimeOutMilli();
+
+	boolean autoSetKeeperSyncLimit();
+
+	boolean disableDb();
+
+	Set<String> getExtraSyncDC();
+
+	String getConsoleNoDbDomain();
+
+	String getHttpAcceptEncoding();
+
+	int getCRedisClusterCacheRefreshIntervalMilli();
+
+	long getKeeperContainerDiskInfoCollectIntervalMilli();
+
 }

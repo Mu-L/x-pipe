@@ -4,6 +4,8 @@ import com.ctrip.xpipe.api.email.EmailService;
 import com.ctrip.xpipe.cluster.ClusterType;
 import com.ctrip.xpipe.cluster.DcGroupType;
 import com.ctrip.xpipe.redis.checker.controller.result.RetMessage;
+import com.ctrip.xpipe.redis.checker.spring.ConsoleDisableDbCondition;
+import com.ctrip.xpipe.redis.checker.spring.DisableDbMode;
 import com.ctrip.xpipe.redis.console.annotation.DalTransaction;
 import com.ctrip.xpipe.redis.console.cache.AzGroupCache;
 import com.ctrip.xpipe.redis.console.config.ConsoleConfig;
@@ -51,10 +53,10 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
-import org.springframework.util.StringUtils;
 import org.unidal.dal.jdbc.DalException;
 
 import java.util.*;
@@ -62,10 +64,13 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import static com.ctrip.xpipe.cluster.ClusterType.HETERO;
 import static com.ctrip.xpipe.redis.core.protocal.RedisProtocol.APPLIER_PORT_DEFAULT;
 import static com.ctrip.xpipe.redis.core.protocal.RedisProtocol.KEEPER_PORT_DEFAULT;
 
 @Service
+@Conditional(ConsoleDisableDbCondition.class)
+@DisableDbMode(false)
 public class ClusterServiceImpl extends AbstractConsoleService<ClusterTblDao> implements ClusterService {
 
 	@Autowired
@@ -147,6 +152,7 @@ public class ClusterServiceImpl extends AbstractConsoleService<ClusterTblDao> im
 	private static final String PROXY_SPLITTER = "\\s*-\\s*";
 	private static final String PROXYTCP = "PROXYTCP://%s:80";
 	private static final String PROXYTLS = "PROXYTLS://%s:443";
+	public static final String CLUSTER_DEFAULT_TAG = "";
 
 	@Override
 	public ClusterTbl find(final String clusterName) {
@@ -233,6 +239,31 @@ public class ClusterServiceImpl extends AbstractConsoleService<ClusterTblDao> im
 		clusterTbls.forEach(clusterTbl -> clusterNames.add(clusterTbl.getClusterName()));
 
 		return clusterNames;
+	}
+
+	@Override
+	public String findClusterTag(String clusterName) {
+		ClusterTbl clusterTbl = find(clusterName);
+		String tag;
+		if (clusterTbl == null) {
+			tag = "";
+		} else {
+			tag = clusterTbl.getTag();
+		}
+		return tag;
+	}
+
+	@Override
+	public void updateClusterTag(String clusterName, String clusterTag) {
+		ClusterTbl clusterTbl = find(clusterName);
+		if (clusterTbl == null) {
+			throw new IllegalArgumentException("cluster not found:" + clusterName);
+		}
+		if (clusterTag == null) {
+			throw new IllegalArgumentException("clusterTag can not be null!");
+		}
+		clusterTbl.setTag(clusterTag.trim().toUpperCase());
+		clusterDao.updateCluster(clusterTbl);
 	}
 
 	@Override
@@ -423,6 +454,7 @@ public class ClusterServiceImpl extends AbstractConsoleService<ClusterTblDao> im
         }
         proto.setClusterAdminEmails(cluster.getClusterAdminEmails());
         proto.setClusterOrgId(getOrgIdFromClusterOrgName(cluster));
+		proto.setTag(CLUSTER_DEFAULT_TAG);
 
         final ClusterTbl queryProto = proto;
         ClusterTbl result = queryHandler.handleQuery(new DalQuery<ClusterTbl>() {
@@ -456,7 +488,7 @@ public class ClusterServiceImpl extends AbstractConsoleService<ClusterTblDao> im
 
                     dcCluster.getShards().forEach(shardModel -> {
                         shardService.findOrCreateShardIfNotExist(result.getClusterName(), shardModel.getShardTbl(),
-                            dcClusterTbls, sentinelBalanceService.selectMultiDcSentinels(clusterType));
+                            dcClusterTbls, sentinelBalanceService.selectMultiDcSentinels(clusterType, CLUSTER_DEFAULT_TAG));
                     });
                 }
             }
@@ -587,6 +619,7 @@ public class ClusterServiceImpl extends AbstractConsoleService<ClusterTblDao> im
 		clusterTbl.setIsXpipeInterested(true);
 		clusterTbl.setClusterLastModifiedTime(DataModifiedTimeGenerator.generateModifiedTime());
 		clusterTbl.setClusterDesignatedRouteIds("");
+		clusterTbl.setTag(CLUSTER_DEFAULT_TAG);
 
 		return clusterDao.createCluster(clusterTbl);
 	}
@@ -691,12 +724,17 @@ public class ClusterServiceImpl extends AbstractConsoleService<ClusterTblDao> im
         if (!StringUtil.isEmpty(clusterType)) {
             String oldClusterType = clusterTbl.getClusterType();
             if (!clusterType.equalsIgnoreCase(oldClusterType)) {
-                if (ClusterType.supportConvert(oldClusterType) && ClusterType.supportConvert(clusterType)) {
+				List<AzGroupClusterEntity> azGroupClusters = azGroupClusterRepository.selectByClusterId(clusterTbl.getId());
+				if(ClusterType.isSameClusterType (clusterType, HETERO) && (azGroupClusters == null || azGroupClusters.isEmpty())) {
+					throw new BadRequestException("To convert to HETERO, you need to upgrade to az group model first");
+				}
+
+                if (ClusterType.supportConvert(oldClusterType, clusterType)) {
                     needUpdate = true;
                     clusterTbl.setClusterType(clusterType.toUpperCase());
                 } else {
                     // 仅允许单向同步、异构集群之间互相转换
-                    throw new BadRequestException("Only ONE_WAY/HETERO cluster can be converted to each other");
+                    throw new BadRequestException("Only (ONE_WAY, SINGLE_DC)/HETERO cluster can be converted to each other");
                 }
             }
         }
@@ -739,6 +777,7 @@ public class ClusterServiceImpl extends AbstractConsoleService<ClusterTblDao> im
 		// organization info should not be updated by cluster,
 		// it's automatically updated by scheduled task
 		proto.setOrganizationInfo(null);
+		proto.setTag(cluster.getClusterTbl().getTag() == null ? "" : cluster.getClusterTbl().getTag());
 
 		clusterDao.updateCluster(proto);
 	}
@@ -845,7 +884,7 @@ public class ClusterServiceImpl extends AbstractConsoleService<ClusterTblDao> im
                         String azGroupType = azGroupCluster.getAzGroupClusterType();
                         clusterType = StringUtil.isEmpty(azGroupType) ? clusterType : ClusterType.lookup(azGroupType);
                     }
-                    SentinelGroupModel sentinelGroupModel = sentinelBalanceService.selectSentinel(dc.getDcName(), clusterType);
+                    SentinelGroupModel sentinelGroupModel = sentinelBalanceService.selectSentinel(dc.getDcName(), clusterType, cluster.getTag());
 					return clusterDao.bindDc(cluster, dc, dcClusterTbl, sentinelGroupModel);
 				} else
 					return clusterDao.bindDc(cluster, dc, dcClusterTbl, null);
@@ -893,7 +932,7 @@ public class ClusterServiceImpl extends AbstractConsoleService<ClusterTblDao> im
         ClusterType clusterType = ClusterType.lookup(cluster.getClusterType());
         if (consoleConfig.supportSentinelHealthCheck(clusterType, cluster.getClusterName())) {
 			ClusterType type = azGroupType == null ? clusterType : azGroupType;
-			sentinelGroupModel = sentinelBalanceService.selectSentinel(dcName, type);
+			sentinelGroupModel = sentinelBalanceService.selectSentinel(dcName, type, cluster.getTag());
         }
 
         Long sentinelId = sentinelGroupModel == null ? null : sentinelGroupModel.getSentinelGroupId();
@@ -1502,7 +1541,7 @@ public class ClusterServiceImpl extends AbstractConsoleService<ClusterTblDao> im
 		if (!needCheckClusterRouteInfo(clusterTbl.getClusterType())) return defaultRoutes;
 
 		List<String> dstDcNames = parseDstDcs(clusterTbl);
-		Map<String, RouteMeta> chooseRoutes = metaCache.chooseDefaultRoutes(clusterName, srcDcName, dstDcNames, (int) clusterTbl.getClusterOrgId());
+		Map<String, RouteMeta> chooseRoutes = metaCache.chooseDefaultMetaRoutes(clusterName, srcDcName, dstDcNames);
 		if (chooseRoutes == null || chooseRoutes.isEmpty()) return defaultRoutes;
 
 		Map<Long, RouteInfoModel> routeIdInfoModelMap = routeService.getRouteIdInfoModelMap();
@@ -1746,7 +1785,7 @@ public class ClusterServiceImpl extends AbstractConsoleService<ClusterTblDao> im
 
 	private Map<String, RouteMeta> getChooseRoutes(ClusterMeta clusterMeta, String srcDcName) {
 		List<String> dstDcNames = parseDstDcs(clusterMeta);
-		return metaCache.chooseRoutes(clusterMeta.getId(), srcDcName, dstDcNames, clusterMeta.getOrgId());
+		return metaCache.chooseClusterMetaRoutes(clusterMeta.getId(), srcDcName, dstDcNames);
 	}
 
 	private List<String> parseDstDcs(ClusterMeta clusterMeta) {

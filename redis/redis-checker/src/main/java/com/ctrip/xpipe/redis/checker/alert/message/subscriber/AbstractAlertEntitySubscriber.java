@@ -1,56 +1,37 @@
 package com.ctrip.xpipe.redis.checker.alert.message.subscriber;
 
 import com.ctrip.xpipe.redis.checker.alert.*;
-import com.ctrip.xpipe.redis.checker.alert.manager.AlertPolicyManager;
-import com.ctrip.xpipe.redis.checker.alert.manager.DecoratorManager;
-import com.ctrip.xpipe.redis.checker.alert.manager.SenderManager;
+import com.ctrip.xpipe.redis.checker.alert.message.AlertEntityHandler;
 import com.ctrip.xpipe.redis.checker.alert.message.AlertEntityHolderManager;
 import com.ctrip.xpipe.redis.checker.alert.message.AlertEntitySubscriber;
-import com.ctrip.xpipe.redis.checker.alert.policy.receiver.EmailReceiverModel;
-import com.ctrip.xpipe.redis.checker.alert.sender.AbstractSender;
 import com.ctrip.xpipe.redis.checker.alert.event.EventBus;
-import com.ctrip.xpipe.tuple.Pair;
+import com.ctrip.xpipe.redis.checker.alert.policy.receiver.EmailReceiverModel;
+import com.ctrip.xpipe.redis.checker.resource.CheckLeaderService;
 import com.ctrip.xpipe.utils.DateTimeUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import javax.annotation.Resource;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static com.ctrip.xpipe.spring.AbstractSpringConfigContext.GLOBAL_EXECUTOR;
-import static com.ctrip.xpipe.spring.AbstractSpringConfigContext.SCHEDULED_EXECUTOR;
 
 /**
  * @author chen.zhu
  * <p>
  * Apr 19, 2018
  */
-public abstract class AbstractAlertEntitySubscriber implements AlertEntitySubscriber {
-
-    protected static final Logger logger = LoggerFactory.getLogger(AbstractAlertEntitySubscriber.class);
+public abstract class AbstractAlertEntitySubscriber extends AlertEntityHandler implements AlertEntitySubscriber {
 
     protected final Lock lock = new ReentrantLock();
 
     @Autowired
-    private DecoratorManager decoratorManager;
-
-    @Autowired
-    private SenderManager senderManager;
-
-    @Autowired
-    private AlertPolicyManager alertPolicyManager;
-
-    @Autowired
     private AlertConfig alertConfig;
 
-    @Resource(name = SCHEDULED_EXECUTOR)
-    protected ScheduledExecutorService scheduled;
+    @Autowired(required = false)
+    private CheckLeaderService checkLeaderService;
 
     @Resource(name = GLOBAL_EXECUTOR)
     protected ExecutorService executors;
@@ -67,38 +48,11 @@ public abstract class AbstractAlertEntitySubscriber implements AlertEntitySubscr
 
     @Override
     public void processData(AlertEntity alert) {
-        logger.debug("process alert: {}", alert);
+        getLogger().debug("process alert: {}", alert);
         doProcessAlert(alert);
     }
 
     protected abstract void doProcessAlert(AlertEntity alert);
-
-    protected AlertMessageEntity getMessage(AlertEntity alert, boolean isAlertMessage) {
-        Pair<String, String> titleAndContent = decoratorManager.generateTitleAndContent(alert, isAlertMessage);
-
-        EmailReceiverModel receivers = alertPolicyManager.queryEmailReceivers(alert);
-        AlertMessageEntity message = new AlertMessageEntity(titleAndContent.getKey(), titleAndContent.getValue(),
-                receivers.getRecipients(), alert);
-
-        message.addParam(AbstractSender.CC_ER, receivers.getCcers());
-
-        return message;
-    }
-
-    protected AlertMessageEntity getMessage(EmailReceiverModel receivers, Map<ALERT_TYPE, Set<AlertEntity>> alerts,
-                                            boolean isAlertMessage) {
-
-        Pair<String, String> titleAndContent = decoratorManager().generateTitleAndContent(alerts, isAlertMessage);
-        AlertMessageEntity message = new AlertMessageEntity(titleAndContent.getKey(), titleAndContent.getValue(),
-                receivers.getRecipients());
-        message.addParam(AbstractSender.CC_ER, receivers.getCcers());
-
-        return message;
-    }
-
-    protected void emailMessage(AlertMessageEntity message) {
-        senderManager.sendAlert(AlertChannel.MAIL, message);
-    }
 
     protected long recoveryMilli(AlertEntity alert) {
         return alertPolicyManager.queryRecoverMilli(alert);
@@ -108,33 +62,58 @@ public abstract class AbstractAlertEntitySubscriber implements AlertEntitySubscr
         long recoveryMilli = recoveryMilli(alert);
         long expectedRecoverMilli = recoveryMilli + alert.getDate().getTime();
         if(expectedRecoverMilli <= System.currentTimeMillis()) {
-            logger.debug("[alertRecovered] alert: {}, expected: {}, now: {}", DateTimeUtils.timeAsString(alert.getDate()),
+            getLogger().debug("[alertRecovered] alert: {}, expected: {}, now: {}", DateTimeUtils.timeAsString(alert.getDate()),
                     DateTimeUtils.timeAsString(expectedRecoverMilli), DateTimeUtils.currentTimeAsString());
             return true;
         }
         return false;
     }
 
-    protected void addAlertsToAlertHolders(Set<AlertEntity> alerts, AlertEntityHolderManager holderManager) {
-        try {
-            lock.lock();
-            for(AlertEntity alertEntity : alerts) {
-                holderManager.holdAlert(alertEntity);
-            }
-        } finally {
-            lock.unlock();
-        }
-    }
-
     protected AlertConfig alertConfig() {
         return alertConfig;
     }
 
-    protected AlertPolicyManager alertPolicyManager() {
-        return alertPolicyManager;
+    protected void transmitAlterToCheckerLeader(boolean isAlert, Map<ALERT_TYPE, Set<AlertEntity>> alerts) {
+        List<AlertEntity> sendingAlerts = new ArrayList<>();
+        for(Map.Entry<ALERT_TYPE, Set<AlertEntity>> entry : alerts.entrySet()) {
+            ALERT_TYPE alertType = entry.getKey();
+            if(alertType.sendToCheckerLeader()) {
+                sendingAlerts.addAll(entry.getValue());
+            }
+        }
+
+        if(sendingAlerts.size() == 0) {
+            return;
+        }
+        String alertType = isAlert ? "alert" : "recover";
+        boolean sendStatus = checkLeaderService.sendAlertToCheckerLeader(alertType, sendingAlerts);
+        if(sendStatus) {
+            Iterator<Map.Entry<ALERT_TYPE, Set<AlertEntity>>> iterator = alerts.entrySet().iterator();
+            while (iterator.hasNext()) {
+                Map.Entry<ALERT_TYPE, Set<AlertEntity>> entry = iterator.next();
+                if(entry.getKey().sendToCheckerLeader()) {
+                    iterator.remove();
+                }
+            }
+        }
     }
 
-    protected DecoratorManager decoratorManager() {
-        return decoratorManager;
+    protected void doSend(AlertEntityHolderManager holderManager, boolean isAlert) {
+        Map<EmailReceiverModel, Map<ALERT_TYPE, Set<AlertEntity>>> map = alertPolicyManager().queryGroupedEmailReceivers(holderManager);
+
+        for(Map.Entry<EmailReceiverModel, Map<ALERT_TYPE, Set<AlertEntity>>> mailGroup : map.entrySet()) {
+            if(mailGroup.getValue() == null || mailGroup.getValue().isEmpty()) {
+                continue;
+            }
+            getLogger().debug("[AlertEntitySubscriber] Mail out: {}", mailGroup.getValue());
+            Map<ALERT_TYPE, Set<AlertEntity>> alerts = mailGroup.getValue();
+            transmitAlterToCheckerLeader(isAlert, alerts);
+            if(alerts.size() == 0) {
+                continue;
+            }
+            AlertMessageEntity message = getMessage(mailGroup.getKey(), alerts, isAlert);
+            emailMessage(message);
+            tryMetric(alerts, isAlert);
+        }
     }
 }

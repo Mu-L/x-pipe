@@ -42,8 +42,12 @@ public class SentinelConfigCheck extends AbstractCrossDcIntervalAction {
         if (null == xpipeMeta) return;
 
         for (DcMeta dc: xpipeMeta.getDcs().values()) {
-            List<DcClusterShard> clusterShards = findUnsafeClusterShardInDc(dc);
-            alertForSentinelMissing(dc.getId(), clusterShards);
+            try {
+                List<DcClusterShard> clusterShards = findUnsafeClusterShardInDc(dc);
+                alertForSentinelMissing(dc.getId(), clusterShards);
+            } catch (Exception e) {
+                logger.error("[SentinelConfigCheck] err", e);
+            }
         }
     }
 
@@ -70,7 +74,7 @@ public class SentinelConfigCheck extends AbstractCrossDcIntervalAction {
     private boolean isDcClusterShardSafe(DcMeta dcMeta, ClusterMeta cluster, ShardMeta shard) {
         if (!ClusterType.lookup(cluster.getType()).supportMultiActiveDC()) {
             // sentinel is unnecessary for single active cluster in cross-region dc
-            String activeDc = metaCache.getActiveDc(cluster.getId(), shard.getId());
+            String activeDc = metaCache.getActiveDc(cluster.getId());
             if (metaCache.isCrossRegion(activeDc, dcMeta.getId())) return true;
         }
 

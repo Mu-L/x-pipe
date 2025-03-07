@@ -21,11 +21,13 @@ import com.ctrip.xpipe.redis.meta.server.cluster.CurrentClusterServer;
 import com.ctrip.xpipe.redis.meta.server.cluster.SlotManager;
 import com.ctrip.xpipe.redis.meta.server.meta.CurrentMeta;
 import com.ctrip.xpipe.redis.meta.server.meta.CurrentMetaManager;
+import com.ctrip.xpipe.redis.meta.server.meta.CurrentShardMeta;
 import com.ctrip.xpipe.redis.meta.server.meta.DcMetaCache;
 import com.ctrip.xpipe.spring.AbstractSpringConfigContext;
 import com.ctrip.xpipe.tuple.Pair;
 import com.ctrip.xpipe.utils.IpUtils;
 import com.ctrip.xpipe.utils.ObjectUtils;
+import com.ctrip.xpipe.utils.StringUtil;
 import com.ctrip.xpipe.utils.VisibleForTesting;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
@@ -473,7 +475,12 @@ public class DefaultCurrentMetaManager extends AbstractLifecycleObservable imple
 		JsonCodec codec = new JsonCodec(true, true);
 		return codec.encode(desc);
 	}
-	
+
+	@Override
+	public List<KeeperMeta> getOneWaySurviveKeepers(Long clusterDbId, Long shardDbId) {
+		return currentMeta.getOneWaySurviveKeepers(clusterDbId, shardDbId);
+	}
+
 	protected Set<Integer> getCurrentSlots() {
 		return currentSlots;
 	}
@@ -528,8 +535,18 @@ public class DefaultCurrentMetaManager extends AbstractLifecycleObservable imple
 
 	@Override
 	public void setKeeperMaster(Long clusterDbId, Long shardDbId, String ip, int port) {
-		
-		
+		setKeeperMaster(clusterDbId, shardDbId, ip, port, null);
+	}
+
+	@Override
+	public void setKeeperMaster(Long clusterDbId, Long shardDbId, String ip, int port, String expectedPrimaryDc) {
+		String dcName = dcMetaCache.getPrimaryDc(clusterDbId, shardDbId);
+		if(expectedPrimaryDc != null && !StringUtil.trimEquals(dcName, expectedPrimaryDc)) {
+			// 如果 expectedDc 为null, 不进行校验。发生了dr切换，禁止修改。
+			// 如果任务基于 PrimaryDc 来修改 keeper meta 就要校验检测过程是否 dc 切换。
+			logger.info("[setKeeperMaster][rejected] primaryDc:{}, expectedPrimaryDc:{}", dcName, expectedPrimaryDc);
+			return;
+		}
 		Pair<String, Integer> keeperMaster = new Pair<String, Integer>(ip, port);
 		if(currentMeta.setKeeperMaster(clusterDbId, shardDbId, keeperMaster)){
 			logger.info("[setKeeperMaster]cluster_{},shard_{},{}:{}", clusterDbId, shardDbId, ip, port);

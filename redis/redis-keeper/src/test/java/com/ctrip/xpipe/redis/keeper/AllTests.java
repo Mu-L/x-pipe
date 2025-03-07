@@ -18,6 +18,7 @@ import com.ctrip.xpipe.redis.keeper.ratelimit.CompositeLeakyBucketTest;
 import com.ctrip.xpipe.redis.keeper.ratelimit.DefaultLeakyBucketTest;
 import com.ctrip.xpipe.redis.keeper.ratelimit.LeakyBucketBasedMasterReplicationListenerTest;
 import com.ctrip.xpipe.redis.keeper.ratelimit.RateLimitTest;
+import com.ctrip.xpipe.redis.keeper.ratelimit.impl.FixSyncRateManagerTest;
 import com.ctrip.xpipe.redis.keeper.store.*;
 import com.ctrip.xpipe.redis.keeper.store.cmd.GtidCmdOneSegmentReaderTest;
 import com.ctrip.xpipe.redis.keeper.store.cmd.GtidSetCommandReaderTest;
@@ -44,6 +45,7 @@ import org.junit.runners.Suite.SuiteClasses;
         RedisKeeperServerStateActiveTest.class,
         RedisKeeperServerStateUnknownTest.class,
         DefaultRedisMasterReplicationTest.class,
+        RdbonlyRedisMasterReplicationTest.class,
         RedisMasterNewRdbDumperTest.class,
         StateBackupDeadlockTest.class,
         KeeperContainerServiceTest.class,
@@ -63,7 +65,9 @@ import org.junit.runners.Suite.SuiteClasses;
         SlaveOfCommandHandlerTest.class,
         KeeperCommandHandlerTest.class,
         InfoHandlerTest.class,
+        ConfigHandlerTest.class,
         ApplierCommandHandlerTest.class,
+        FakeRedisRdbOnlyDumpTest.class,
 
         DefaultKeeperStatsTest.class,
         DefaultLeakyBucketTest.class,
@@ -82,6 +86,10 @@ import org.junit.runners.Suite.SuiteClasses;
         GtidSetCommandReaderTest.class,
 
         DiskHealthCheckerTest.class,
+
+        RordbReplicationSupportTest.class,
+
+        FixSyncRateManagerTest.class,
 
         AllApplierTests.class,
 })

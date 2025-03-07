@@ -6,6 +6,7 @@ import com.ctrip.xpipe.command.DefaultCommandFuture;
 import com.ctrip.xpipe.exception.XpipeRuntimeException;
 import com.google.common.util.concurrent.FutureCallback;
 import credis.java.client.AsyncCacheProvider;
+import credis.java.client.async.applier.AsyncApplierCacheProvider;
 import credis.java.client.async.command.CRedisAsyncRequest;
 import credis.java.client.async.impl.AsyncCacheProviderImpl;
 import credis.java.client.async.qclient.CRedisSessionLocator;
@@ -41,7 +42,7 @@ public class CRedisAsyncClient implements AsyncRedisClient {
 
     final String subenv;
 
-    final AsyncCacheProviderImpl asyncProvider;
+    final AsyncApplierCacheProvider asyncProvider;
 
     final Codec codec;
 
@@ -55,15 +56,13 @@ public class CRedisAsyncClient implements AsyncRedisClient {
 
     boolean isInMulti = false;
 
-    int db = 0;
-
     // simple fix locator parallel
     private final Object locatorLock = new Object();
 
-    public CRedisAsyncClient(String clusterName, String subenv, AsyncCacheProvider asyncProvider, ApplierCacheProvider txnProvider, ExecutorService credisNotifyExecutor, ConfigFrozenAware configFrozenAware, HashStrategyFactory hashStrategyFactory) {
+    public CRedisAsyncClient(String clusterName, String subenv, AsyncApplierCacheProvider asyncProvider, ApplierCacheProvider txnProvider, ExecutorService credisNotifyExecutor, ConfigFrozenAware configFrozenAware, HashStrategyFactory hashStrategyFactory) {
         this.clusterName = clusterName;
         this.subenv = subenv;
-        this.asyncProvider = (AsyncCacheProviderImpl) asyncProvider;
+        this.asyncProvider = asyncProvider;
         this.txnProvider = txnProvider;
         this.configFrozenAware = configFrozenAware;
         this.hashStrategyFactory = hashStrategyFactory;
@@ -113,11 +112,6 @@ public class CRedisAsyncClient implements AsyncRedisClient {
         }
     }
 
-    @Override
-    public void selectDB(int db) {
-        this.db = db;
-    }
-
     private void cleanTransactionResource() {
         if (clients2TxnClients.isEmpty()) return;
 
@@ -146,11 +140,11 @@ public class CRedisAsyncClient implements AsyncRedisClient {
     }
 
     @Override
-    public CommandFuture<Object> write(Object resource, Object... rawArgs) {
+    public CommandFuture<Object> write(Object resource, int dbNumber, Object... rawArgs) {
         if (isInMulti) {
             try {
                 RedisClient client = (RedisClient) resource;
-                client.selectDB(db);
+                client.selectDB(dbNumber);
                 RedisTransactionClient txnClient = clients2TxnClients.get(client);
                 txnClient.write(rawArgs);
                 return resultFuture("OK");
@@ -164,7 +158,7 @@ public class CRedisAsyncClient implements AsyncRedisClient {
         for (Object rawArg : rawArgs) {
             command.write(rawArg);
         }
-        CRedisAsyncRequest<Object> request = CRedisAsyncRequest.from(new ValueResult<>(), db);
+        CRedisAsyncRequest<Object> request = CRedisAsyncRequest.from(new ValueResult<>(), dbNumber);
         DefaultCommandFuture<Object> commandFuture = new DefaultCommandFuture<>();
         channel.dispatch(request, command).addListener(new FutureCallback<Object>() {
             @Override
@@ -238,7 +232,7 @@ public class CRedisAsyncClient implements AsyncRedisClient {
     }
 
     private CRedisSessionLocator locator() {
-        return asyncProvider.asyncClient.cRedisSessionLocator;
+        return asyncProvider.getCRedisAsyncClient().getSessionLocator();
     }
 
     private <T> CommandFuture<T> resultFuture(T result) {

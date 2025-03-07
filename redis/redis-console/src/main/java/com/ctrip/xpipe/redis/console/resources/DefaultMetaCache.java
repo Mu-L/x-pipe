@@ -3,7 +3,7 @@ package com.ctrip.xpipe.redis.console.resources;
 import com.ctrip.xpipe.api.monitor.Task;
 import com.ctrip.xpipe.api.monitor.TransactionMonitor;
 import com.ctrip.xpipe.concurrent.AbstractExceptionLogTask;
-import com.ctrip.xpipe.redis.checker.cache.TimeBoundCache;
+import com.ctrip.xpipe.cache.TimeBoundCache;
 import com.ctrip.xpipe.redis.console.cluster.ConsoleLeaderAware;
 import com.ctrip.xpipe.redis.console.config.ConsoleConfig;
 import com.ctrip.xpipe.redis.console.exception.DataNotFoundException;
@@ -12,16 +12,14 @@ import com.ctrip.xpipe.redis.console.service.ClusterService;
 import com.ctrip.xpipe.redis.console.service.KeeperContainerService;
 import com.ctrip.xpipe.redis.console.service.RedisCheckRuleService;
 import com.ctrip.xpipe.redis.console.service.meta.DcMetaService;
-import com.ctrip.xpipe.redis.core.entity.DcMeta;
-import com.ctrip.xpipe.redis.core.entity.RedisCheckRuleMeta;
-import com.ctrip.xpipe.redis.core.entity.RouteMeta;
-import com.ctrip.xpipe.redis.core.entity.XpipeMeta;
+import com.ctrip.xpipe.redis.core.entity.*;
 import com.ctrip.xpipe.redis.core.meta.MetaCache;
 import com.ctrip.xpipe.redis.core.meta.XpipeMetaManager;
 import com.ctrip.xpipe.redis.core.route.RouteChooseStrategy;
 import com.ctrip.xpipe.redis.core.route.RouteChooseStrategyFactory;
 import com.ctrip.xpipe.utils.ObjectUtils;
 import com.ctrip.xpipe.utils.VisibleForTesting;
+import com.ctrip.xpipe.utils.XpipeThreadFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import javax.annotation.PreDestroy;
@@ -31,6 +29,9 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.IntStream;
 
 /**
@@ -55,7 +56,7 @@ public class DefaultMetaCache extends AbstractMetaCache implements MetaCache, Co
     private KeeperContainerService keeperContainerService;
 
     @Autowired
-    private ConsoleConfig consoleConfig;
+    protected ConsoleConfig consoleConfig;
 
     @Autowired
     private RouteChooseStrategyFactory routeChooseStrategyFactory;
@@ -68,11 +69,15 @@ public class DefaultMetaCache extends AbstractMetaCache implements MetaCache, Co
 
     private List<TimeBoundCache<String>> xmlFormatXPipeMetaParts = null;
 
-    private ScheduledExecutorService scheduled = Executors.newScheduledThreadPool(1);
+    protected ScheduledExecutorService scheduled = Executors.newScheduledThreadPool(1,
+            XpipeThreadFactory.create("MetaCacheLoad"));
 
-    private ScheduledFuture<?> future;
+    protected ScheduledFuture<?> future;
 
-    private AtomicBoolean taskTrigger = new AtomicBoolean(false);
+    protected AtomicBoolean taskTrigger = new AtomicBoolean(false);
+
+    private final Lock lock = new ReentrantLock();
+    protected final Condition condition = lock.newCondition();
 
     @Override
     public void isleader() {
@@ -88,6 +93,26 @@ public class DefaultMetaCache extends AbstractMetaCache implements MetaCache, Co
             stopLoadMeta();
     }
 
+    @Override
+    public XpipeMeta getXpipeMetaLongPull(long version) throws InterruptedException {
+        XpipeMeta xpipeMeta = null;
+        if(lock.tryLock(consoleConfig.getCacheRefreshInterval(), TimeUnit.MILLISECONDS)) {
+            try {
+                if(getVersion() <= version) {
+                    condition.await(consoleConfig.getCacheRefreshInterval(), TimeUnit.MILLISECONDS);
+                }
+                xpipeMeta = meta.getKey();
+            } catch (Exception e) {
+                logger.debug("[getXpipeMeta]", e);
+            } finally {
+                lock.unlock();
+            }
+        } else {
+            xpipeMeta = meta.getKey();
+        }
+        return xpipeMeta;
+    }
+
     private synchronized void stopLoadMeta(){
         logger.info("[loadMeta][stop]{}", this);
         if (future != null)
@@ -99,7 +124,6 @@ public class DefaultMetaCache extends AbstractMetaCache implements MetaCache, Co
         monitor2ClusterShard = null;
         allKeepers = null;
         allKeeperSize = DEFAULT_KEEPER_NUMBERS;
-        lastUpdateTime = 0;
     }
 
     public void startLoadMeta() {
@@ -112,7 +136,14 @@ public class DefaultMetaCache extends AbstractMetaCache implements MetaCache, Co
             protected void doRun() throws Exception {
                 if(!taskTrigger.get())
                     return;
-                loadCache();
+                if(lock.tryLock(consoleConfig.getCacheRefreshInterval(), TimeUnit.MILLISECONDS)) {
+                    try {
+                        loadCache();
+                        condition.signalAll();
+                    } finally {
+                        lock.unlock();
+                    }
+                }
             }
 
         }, 1000, refreshIntervalMilli, TimeUnit.MILLISECONDS);
@@ -148,8 +179,8 @@ public class DefaultMetaCache extends AbstractMetaCache implements MetaCache, Co
                 }
 
                 synchronized (this) {
-                    refreshMetaParts();
                     XpipeMeta xpipeMeta = createXpipeMeta(dcMetas, redisCheckRuleMetas);
+                    refreshMetaParts(xpipeMeta);
                     refreshMeta(xpipeMeta);
                 }
             }
@@ -161,17 +192,44 @@ public class DefaultMetaCache extends AbstractMetaCache implements MetaCache, Co
         });
     }
 
-    private void refreshMetaParts() {
+    protected List<Set<String>> divideClusters(int partsCnt, XpipeMeta xpipeMeta) {
+
+        List<Set<String>> parts = new ArrayList<>(partsCnt);
+        IntStream.range(0, partsCnt).forEach(i -> parts.add(new HashSet<>()));
+
+        for(DcMeta dcMeta : xpipeMeta.getDcs().values()) {
+            for(ClusterMeta clusterMeta : dcMeta.getClusters().values()) {
+                parts.get((int) (clusterMeta.getDbId() % partsCnt))
+                        .add(clusterMeta.getId());
+            }
+        }
+        return parts;
+    }
+
+    List<Set<Long>> divideKeeperContainers(int partsCount, XpipeMeta xpipeMeta) {
+        List<Set<Long>> result = new ArrayList<>(partsCount);
+        IntStream.range(0, partsCount).forEach(i -> result.add(new HashSet<>()));
+        for(DcMeta dcMeta : xpipeMeta.getDcs().values()) {
+            for(KeeperContainerMeta keeperContainerMeta : dcMeta.getKeeperContainers()) {
+                result.get((int) (keeperContainerMeta.getId() % partsCount)).add(
+                        keeperContainerMeta.getId()
+                );
+            }
+        }
+        return result;
+    }
+
+    protected void refreshMetaParts(XpipeMeta xpipeMeta) {
         try {
             int parts = Math.max(1, consoleConfig.getClusterDividedParts());
             logger.debug("[refreshClusterParts] start parts {}", parts);
 
-            List<Set<String>> newClusterParts = clusterService.divideClusters(parts);
+            List<Set<String>> newClusterParts = divideClusters(parts, xpipeMeta);
             if (newClusterParts.size() < parts) {
                 logger.info("[refreshClusterParts] skip for parts miss, expect {}, actual {}", parts, newClusterParts.size());
                 return;
             }
-            List<Set<Long>> newKeeperContainerParts = keeperContainerService.divideKeeperContainers(parts);
+            List<Set<Long>> newKeeperContainerParts = divideKeeperContainers(parts, xpipeMeta);
             if (newKeeperContainerParts.size() < parts) {
                 logger.info("[refreshKeeperContainerParts] skip for parts miss, expect {}, actual {}",
                         parts, newKeeperContainerParts.size());
@@ -193,21 +251,21 @@ public class DefaultMetaCache extends AbstractMetaCache implements MetaCache, Co
     }
 
     @Override
-    public Map<String, RouteMeta> chooseDefaultRoutes(String clusterName, String srcDc, List<String> dstDcs, int orgId) {
-        return chooseRoutes(clusterName, srcDc, dstDcs, orgId, false);
+    public Map<String, RouteMeta> chooseDefaultMetaRoutes(String clusterName, String srcDc, List<String> dstDcs) {
+        return chooseMetaRoutes(clusterName, srcDc, dstDcs, false);
     }
 
     @Override
-    public Map<String, RouteMeta> chooseRoutes(String clusterName, String srcDc, List<String> dstDcs, int orgId) {
-        return chooseRoutes(clusterName, srcDc, dstDcs, orgId, true);
+    public Map<String, RouteMeta> chooseClusterMetaRoutes(String clusterName, String srcDc, List<String> dstDcs) {
+        return chooseMetaRoutes(clusterName, srcDc, dstDcs, true);
     }
 
-    private Map<String, RouteMeta> chooseRoutes(String clusterName, String srcDc, List<String> dstDcs, int orgId, boolean useClusterPrioritizedRoutes) {
+    private Map<String, RouteMeta> chooseMetaRoutes(String clusterName, String srcDc, List<String> dstDcs, boolean useClusterPrioritizedRoutes) {
         XpipeMetaManager xpipeMetaManager = meta.getValue();
         RouteChooseStrategyFactory.RouteStrategyType routeStrategyType =
                 RouteChooseStrategyFactory.RouteStrategyType.lookup(consoleConfig.getChooseRouteStrategyType());
 
-        return xpipeMetaManager.chooseMetaRoutes(clusterName, srcDc, dstDcs, orgId, getRouteChooseStrategy(routeStrategyType), useClusterPrioritizedRoutes);
+        return xpipeMetaManager.chooseMetaRoutes(clusterName, srcDc, dstDcs, getRouteChooseStrategy(routeStrategyType), useClusterPrioritizedRoutes);
     }
 
     private RouteChooseStrategy getRouteChooseStrategy(RouteChooseStrategyFactory.RouteStrategyType routeStrategyType) {

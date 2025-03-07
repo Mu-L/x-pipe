@@ -1,29 +1,26 @@
 package com.ctrip.xpipe.redis.console.controller.api;
 
 
+import com.ctrip.xpipe.redis.checker.controller.result.GenericRetMessage;
 import com.ctrip.xpipe.redis.checker.controller.result.RetMessage;
 import com.ctrip.xpipe.redis.checker.model.KeeperContainerUsedInfoModel;
 import com.ctrip.xpipe.redis.console.controller.AbstractConsoleController;
 import com.ctrip.xpipe.redis.console.keeper.KeeperContainerUsedInfoAnalyzer;
-import com.ctrip.xpipe.redis.console.keeper.entity.KeeperContainerDiskType;
+import com.ctrip.xpipe.redis.console.keeper.entity.DcCheckerReportMsg;
+import com.ctrip.xpipe.redis.console.keeper.impl.KeeperContainerUsedInfoMsgCollector;
 import com.ctrip.xpipe.redis.console.model.ConfigModel;
-import com.ctrip.xpipe.redis.console.model.KeepercontainerTbl;
+import com.ctrip.xpipe.redis.console.model.KeeperRestElectionModel;
 import com.ctrip.xpipe.redis.console.model.MigrationKeeperContainerDetailModel;
 import com.ctrip.xpipe.redis.console.service.ConfigService;
-import org.apache.http.HttpResponse;
+import com.ctrip.xpipe.redis.checker.KeeperContainerCheckerService;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestMethod;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static com.ctrip.xpipe.redis.console.service.ConfigService.KEY_KEEPER_CONTAINER_IO_RATE;
 import static com.ctrip.xpipe.redis.console.service.ConfigService.KEY_KEEPER_CONTAINER_STANDARD;
 
 @RestController
@@ -36,6 +33,12 @@ public class KeeperContainerController extends AbstractConsoleController{
     @Autowired
     ConfigService configService;
 
+    @Autowired
+    KeeperContainerUsedInfoMsgCollector keeperContainerUsedInfoMsgCollector;
+
+    @Autowired
+    KeeperContainerCheckerService keeperContainerService;
+
     @RequestMapping(value = "/keepercontainer/overload/info/all", method = RequestMethod.GET)
     public List<MigrationKeeperContainerDetailModel> getAllReadyToMigrateKeeperContainers() {
         return analyzer.getCurrentDcReadyToMigrationKeeperContainers();
@@ -46,9 +49,9 @@ public class KeeperContainerController extends AbstractConsoleController{
         return analyzer.getCurrentDcKeeperContainerUsedInfoModelsList();
     }
 
-    @RequestMapping(value = "/keepercontainer/full/synchronization/time", method = RequestMethod.GET)
-    public List<Integer> getMaxKeeperContainerFullSynchronizationTime() {
-        return analyzer.getCurrentDcMaxKeeperContainerFullSynchronizationTime();
+    @RequestMapping(value = "/keepercontainer/redis/msg", method = RequestMethod.GET)
+    public DcCheckerReportMsg getCurrentDcRedisMsg() {
+        return keeperContainerUsedInfoMsgCollector.getCurrentDcRedisMasterMsg();
     }
 
     @RequestMapping(value = "/keepercontainer/diskType", method = RequestMethod.POST)
@@ -63,18 +66,64 @@ public class KeeperContainerController extends AbstractConsoleController{
     }
 
     @RequestMapping(value = "/keepercontainer/diskType", method = RequestMethod.GET)
-    public RetMessage getDiskType() {
+    public String getDiskType() {
         try {
             Map<String, String> map = new HashMap<>();
-            for (KeeperContainerDiskType value : KeeperContainerDiskType.values()) {
-                map.put(value.getPeerData(), configService.getConfig(KEY_KEEPER_CONTAINER_STANDARD, value.getPeerData()).getVal());
-                map.put(value.getInputFlow(), configService.getConfig(KEY_KEEPER_CONTAINER_STANDARD, value.getInputFlow()).getVal());
+            List<ConfigModel> configs = configService.getConfigs(KEY_KEEPER_CONTAINER_STANDARD);
+            for (ConfigModel configModel : configs) {
+                map.put(configModel.getSubKey(), configModel.getVal());
             }
-            return RetMessage.createSuccessMessage(map.toString());
+            return map.toString();
+        } catch (Exception e) {
+            return e.getMessage();
+        }
+    }
+
+    @RequestMapping(value = "/keepercontainer/ioRate", method = RequestMethod.POST)
+    public RetMessage setIORate(@RequestBody ConfigModel configModel) {
+        try {
+            configModel.setKey(KEY_KEEPER_CONTAINER_IO_RATE);
+            configService.setKeyKeeperContainerIoRate(configModel);
+            return RetMessage.createSuccessMessage();
         } catch (Exception e) {
             return RetMessage.createFailMessage(e.getMessage());
         }
     }
+
+    @RequestMapping(value = "/keepercontainer/ioRate", method = RequestMethod.GET)
+    public RetMessage getIORate() {
+        try {
+            Map<String, String> map = new HashMap<>();
+            List<ConfigModel> configs = configService.getConfigs(KEY_KEEPER_CONTAINER_IO_RATE);
+            for (ConfigModel configModel : configs) {
+                map.put(configModel.getSubKey(), configModel.getVal());
+            }
+            return new GenericRetMessage(0, map);
+        } catch (Exception e) {
+            return RetMessage.createFailMessage(e.getMessage());
+        }
+    }
+
+    @RequestMapping(value = "/keepers/election/reset", method = RequestMethod.POST)
+    public RetMessage resetElection(@RequestBody KeeperRestElectionModel model){
+        try {
+            keeperContainerService.resetKeeper(model.getIp(), Long.parseLong(model.getShardId()));
+            return RetMessage.createSuccessMessage();
+        } catch (Exception e) {
+            return RetMessage.createFailMessage(e.getMessage());
+        }
+    }
+
+    @RequestMapping(value = "/keepers/release/rdb", method = RequestMethod.POST)
+    public RetMessage releaseRdb(@RequestBody KeeperRestElectionModel model){
+        try {
+            keeperContainerService.releaseRdb(model.getIp(), Integer.parseInt(model.getPort()), Long.parseLong(model.getShardId()));
+            return RetMessage.createSuccessMessage();
+        } catch (Exception e) {
+            return RetMessage.createFailMessage(e.getMessage());
+        }
+    }
+
 
 
 }

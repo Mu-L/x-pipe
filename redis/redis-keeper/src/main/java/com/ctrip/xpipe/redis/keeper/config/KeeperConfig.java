@@ -2,6 +2,9 @@ package com.ctrip.xpipe.redis.keeper.config;
 
 import com.ctrip.xpipe.redis.core.config.CoreConfig;
 
+import java.util.List;
+import java.util.Map;
+
 /**
  * @author marsqing
  *
@@ -71,5 +74,9 @@ public interface KeeperConfig extends CoreConfig{
 	 * -1 means no limit
 	 */
     int getCrossRegionMaxLoadingSlavesCnt();
+
+    boolean fsyncRateLimit();
+
+	boolean tryRorRdb();
 
 }

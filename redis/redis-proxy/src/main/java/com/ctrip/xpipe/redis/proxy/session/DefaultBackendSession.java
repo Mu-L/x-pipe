@@ -1,6 +1,7 @@
 package com.ctrip.xpipe.redis.proxy.session;
 
 import com.ctrip.xpipe.api.monitor.EventMonitor;
+import com.ctrip.xpipe.concurrent.AbstractExceptionLogTask;
 import com.ctrip.xpipe.proxy.ProxyEndpoint;
 import com.ctrip.xpipe.redis.core.proxy.endpoint.ProxyEndpointSelector;
 import com.ctrip.xpipe.redis.core.proxy.handler.NettySslHandlerFactory;
@@ -11,6 +12,7 @@ import com.ctrip.xpipe.redis.proxy.handler.SessionTrafficReporter;
 import com.ctrip.xpipe.redis.proxy.monitor.SessionMonitor;
 import com.ctrip.xpipe.redis.proxy.resource.ResourceManager;
 import com.ctrip.xpipe.redis.proxy.session.state.SessionClosed;
+import com.ctrip.xpipe.redis.proxy.session.state.SessionClosing;
 import com.ctrip.xpipe.redis.proxy.session.state.SessionEstablished;
 import com.ctrip.xpipe.redis.proxy.session.state.SessionInit;
 import com.ctrip.xpipe.utils.ChannelUtil;
@@ -24,7 +26,9 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.logging.LogLevel;
 import io.netty.handler.logging.LoggingHandler;
+import io.netty.util.ReferenceCountUtil;
 
+import java.util.Collections;
 import java.util.LinkedList;
 import java.util.Queue;
 import java.util.concurrent.TimeUnit;
@@ -52,7 +56,7 @@ public class DefaultBackendSession extends AbstractSession implements BackendSes
 
     private ProxyEndpointSelector selector;
 
-    private Queue<ByteBuf> sendAfterProtocol;
+    private volatile Queue<ByteBuf> sendAfterProtocol = new LinkedList<>();
 
     private EventLoopGroup nioEventLoopGroup;
 
@@ -78,22 +82,39 @@ public class DefaultBackendSession extends AbstractSession implements BackendSes
             return;
         }
 
-        endpoint = selector.nextHop();
-        if (endpoint == null) {
+        ChannelFuture connectionFuture;
+        try {
+            this.endpoint = selector.nextHop();
+            connectionFuture = initChannel(endpoint);
+        } catch (Throwable th) {
             setSessionState(new SessionClosed(this));
-            logger.error("[connect] select nextHop error");
-            return;
+            throw th;
         }
-        ChannelFuture connectionFuture = initChannel(endpoint);
+
         connectionFuture.addListener(new ChannelFutureListener() {
             @Override
             public void operationComplete(ChannelFuture future) throws Exception {
                 if(future.isSuccess()) {
-                    onChannelEstablished(future.channel());
-                } else {
-                    logger.error("[tryConnect] fail to connect: {}, {}", getSessionMeta(), future.cause());
+                    try {
+                        // may OOM on ZstdEncoder init
+                        onChannelEstablished(future.channel());
+                    } catch (Throwable th) {
+                        logger.info("[tryConnect][connect success, but init fail] {}", getSessionMeta(), th);
+                        future.channel().close();
+                        setSessionState(new SessionClosed(DefaultBackendSession.this));
+                    }
+                } else if (null != future.channel() && future.channel().isRegistered()) {
+                    logger.error("[tryConnect][connect fail, retry] {}", getSessionMeta(), future.cause());
                     future.channel().eventLoop()
-                            .schedule(()->connect(), selector.selectCounts(), TimeUnit.MILLISECONDS);
+                            .schedule(new AbstractExceptionLogTask() {
+                                @Override
+                                protected void doRun() throws Exception {
+                                    connect();
+                                }
+                            }, selector.selectCounts(), TimeUnit.MILLISECONDS);
+                } else {
+                    logger.error("[tryConnect][channel fail, no retry] {}", getSessionMeta(), future.cause());
+                    setSessionState(new SessionClosed(DefaultBackendSession.this));
                 }
             }
         });
@@ -117,7 +138,7 @@ public class DefaultBackendSession extends AbstractSession implements BackendSes
                             p.addLast(sslHandlerFactory.createSslHandler(ch));
                         }
                         p.addLast(loggingHandler);
-                        p.addLast(new SessionTrafficReporter(trafficReportIntervalMillis, DefaultBackendSession.this));
+                        p.addLast(new SessionTrafficReporter(trafficReportIntervalMillis, config::shouldReportTraffic, DefaultBackendSession.this));
                         p.addLast(BACKEND_SESSION_HANDLER, new BackendSessionHandler(tunnel()));
                     }
                 });
@@ -125,17 +146,24 @@ public class DefaultBackendSession extends AbstractSession implements BackendSes
     }
 
     @Override
-    public void sendAfterProtocol(ByteBuf byteBuf) throws Exception {
-        if(sendAfterProtocol == null) {
-            sendAfterProtocol = new LinkedList<>();
+    public synchronized void sendAfterProtocol(ByteBuf byteBuf) throws Exception {
+        if (null == sendAfterProtocol) {
+            if (isClosed()) {
+                logger.info("[sendAfterProtocol][already closed] skip");
+            } else {
+                logger.info("[sendAfterProtocol][unexpected fail] close");
+                release();
+            }
+        } else {
+            if (logger.isDebugEnabled()) logger.debug("[sendAfterProtocol][{}] {}", getSessionId(), ByteBufUtil.prettyHexDump(byteBuf));
+            sendAfterProtocol.offer(byteBuf.retain());
         }
-        logger.debug("[sendAfterProtocol] {}", ByteBufUtil.prettyHexDump(byteBuf));
-        sendAfterProtocol.offer(byteBuf.retain());
     }
 
     protected void onChannelEstablished(Channel channel) {
         setChannel(channel);
 
+        logger.debug("[onChannelEstablished] {}", getSessionMeta());
         if(endpoint.isProxyProtocolSupported()) {
             getChannel().writeAndFlush(tunnel().getProxyProtocol().output());
         }
@@ -152,7 +180,13 @@ public class DefaultBackendSession extends AbstractSession implements BackendSes
             sendAfterProtocol = null;
         }
         setSessionState(new SessionEstablished(DefaultBackendSession.this));
-        onSessionEstablished();
+        SessionState currentSessionState = getSessionState();
+        if (currentSessionState instanceof SessionClosing || currentSessionState instanceof SessionClosed) {
+            logger.info("[onChannelEstablished][but session {}] {}", currentSessionState, getSessionMeta());
+            release();
+        } else {
+            onSessionEstablished();
+        }
     }
 
     @Override
@@ -171,12 +205,31 @@ public class DefaultBackendSession extends AbstractSession implements BackendSes
     protected void doSetSessionState(SessionState newState) {
         SessionState oldState = this.sessionState.getAndSet(newState);
         if(oldState.equals(newState)) {
-            logger.debug("[setSessionState] already session state: {}", oldState);
+            logger.debug("[setSessionState][Backend] already session state: {}", oldState);
         } else {
-            logger.info("[setSessionState] Session state change from {} to {} ({})", oldState, newState, getSessionMeta());
-            EventMonitor.DEFAULT.logEvent(SESSION_STATE_CHANGE, String.format("%s -> %s(%s)",
-                    oldState.toString(), newState.toString(), ChannelUtil.getDesc(getChannel())));
+            logger.info("[setSessionState][Backend] Session state change from {} to {} ({})", oldState, newState, getSessionMeta());
+            EventMonitor.DEFAULT.logEvent(SESSION_STATE_CHANGE, String.format("[Backend]%s->%s", oldState.toString(), newState.toString()),
+                    Collections.singletonMap("channel", ChannelUtil.getDesc(getChannel())));
+            if (isClosed()) {
+                releaseByteBufSendAfterProtocol();
+            }
             notifyObservers(new SessionStateChangeEvent(oldState, newState));
+        }
+    }
+
+
+
+    private void releaseByteBufSendAfterProtocol() {
+        if (null == sendAfterProtocol) return;
+
+        synchronized (this) {
+            if (null == sendAfterProtocol) return;
+            logger.info("[release][{}] release sendAfterProtocol", getSessionId());
+            while(!sendAfterProtocol.isEmpty()) {
+                ByteBuf byteBuf = sendAfterProtocol.poll();
+                ReferenceCountUtil.release(byteBuf);
+            }
+            sendAfterProtocol = null;
         }
     }
 

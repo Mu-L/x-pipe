@@ -2,7 +2,8 @@ package com.ctrip.xpipe.redis.console;
 
 
 import com.ctrip.xpipe.redis.console.alert.EmailSentCounterTest;
-import com.ctrip.xpipe.redis.console.beacon.DefaultMonitorClusterManagerTest;
+import com.ctrip.xpipe.redis.console.keeper.impl.*;
+import com.ctrip.xpipe.redis.console.migration.auto.DefaultMonitorClusterManagerTest;
 import com.ctrip.xpipe.redis.console.beacon.DefaultMonitorManagerTest;
 import com.ctrip.xpipe.redis.console.checker.DefaultCheckerManagerTest;
 import com.ctrip.xpipe.redis.console.cluster.ConsoleCrossDcServerTest;
@@ -14,6 +15,7 @@ import com.ctrip.xpipe.redis.console.controller.api.data.*;
 import com.ctrip.xpipe.redis.console.controller.api.data.meta.CheckPrepareRequestTest;
 import com.ctrip.xpipe.redis.console.controller.api.data.meta.ClusterCreateInfoTest;
 import com.ctrip.xpipe.redis.console.controller.api.data.meta.RedisInstanceInfoTest;
+import com.ctrip.xpipe.redis.console.controller.api.migrate.MigrationApiIntegrationTest;
 import com.ctrip.xpipe.redis.console.controller.api.migrate.MigrationApiTest;
 import com.ctrip.xpipe.redis.console.controller.config.ClusterCheckInterceptorTest;
 import com.ctrip.xpipe.redis.console.controller.consoleportal.RedisControllerTest;
@@ -39,8 +41,6 @@ import com.ctrip.xpipe.redis.console.healthcheck.nonredis.redisconfig.RedisConfi
 import com.ctrip.xpipe.redis.console.healthcheck.nonredis.sentinelconfig.SentinelConfigCheckTest;
 import com.ctrip.xpipe.redis.console.healthcheck.nonredis.unhealthycluster.UnhealthyClusterCheckerTest;
 import com.ctrip.xpipe.redis.console.keeper.AutoMigrateOverloadKeeperContainerActionTest;
-import com.ctrip.xpipe.redis.console.keeper.impl.DefaultKeeperUsedInfoAnalyzerTest;
-import com.ctrip.xpipe.redis.console.keeper.impl.GetAllDcCommandTest;
 import com.ctrip.xpipe.redis.console.migration.MigrationShardRollbackTest;
 import com.ctrip.xpipe.redis.console.migration.MultiClusterMigrationTest;
 import com.ctrip.xpipe.redis.console.migration.SingleShardMigrationTest;
@@ -70,6 +70,7 @@ import com.ctrip.xpipe.redis.console.resources.DefaultPersistenceCacheTest;
 import com.ctrip.xpipe.redis.console.sentinel.impl.DefaultSentinelBalanceServiceTest;
 import com.ctrip.xpipe.redis.console.service.BasicServiceTest;
 import com.ctrip.xpipe.redis.console.service.MetaServiceTest;
+import com.ctrip.xpipe.redis.console.service.ShardModelServiceTest;
 import com.ctrip.xpipe.redis.console.service.ShardServiceTest2;
 import com.ctrip.xpipe.redis.console.service.impl.*;
 import com.ctrip.xpipe.redis.console.service.meta.impl.*;
@@ -96,7 +97,7 @@ import org.junit.runners.Suite.SuiteClasses;
         ClusterServiceImplTest.class,
         ClusterServiceImplTest2.class,
         RedisServiceImplTest.class,
-        KeeperContainerServiceImplTest.class,
+        KeeperContainerCheckerServiceImplTest.class,
         ShardServiceImplTest.class,
         ShardServiceImplTest2.class,
         ShardServiceTest2.class,
@@ -201,6 +202,7 @@ import org.junit.runners.Suite.SuiteClasses;
         BeaconMetaServiceImplTest.class,
         BeaconMigrationServiceImplTest.class,
         MigrationApiTest.class,
+        MigrationApiIntegrationTest.class,
         ExclusiveThreadsForMigrationTest.class,
         XPipeHandlerMethodCommandTest.class,
 
@@ -226,17 +228,21 @@ import org.junit.runners.Suite.SuiteClasses;
         RedisCheckRuleServiceImplTest.class,
         EmailSentCounterTest.class,
 
-        ClusterTypeUpdateEventListenerTest.class,
+       ClusterTypeUpdateEventListenerTest.class,
 
         DefaultKeeperContainerMigrationServiceTest.class,
         AutoMigrateOverloadKeeperContainerActionTest.class,
         DefaultKeeperUsedInfoAnalyzerTest.class,
         GetAllDcCommandTest.class,
+        AbstractKeeperCommandTest.class,
+        CheckerKeeperActiveCommandTest.class,
 
         RouteInfoControllerTest.class,
         RedisControllerTest.class,
         DcRelationsServiceTest.class,
-        DefaultMigrationProcessReporterTest.class
+        DefaultMigrationProcessReporterTest.class,
+        ShardModelServiceTest.class,
+        KeeperContainerUsedInfoMsgCollectorTest.class
 })
 public class AllTests {
 

@@ -16,11 +16,13 @@ import com.ctrip.xpipe.redis.keeper.RedisKeeperServer;
 import com.ctrip.xpipe.redis.keeper.config.KeeperConfig;
 import com.ctrip.xpipe.redis.keeper.config.KeeperContainerConfig;
 import com.ctrip.xpipe.redis.keeper.config.KeeperResourceManager;
+import com.ctrip.xpipe.redis.keeper.config.ReplDelayConfigCache;
 import com.ctrip.xpipe.redis.keeper.exception.RedisKeeperRuntimeException;
 import com.ctrip.xpipe.redis.keeper.health.DiskHealthChecker;
 import com.ctrip.xpipe.redis.keeper.health.HealthState;
 import com.ctrip.xpipe.redis.keeper.impl.DefaultRedisKeeperServer;
 import com.ctrip.xpipe.redis.keeper.monitor.KeepersMonitorManager;
+import com.ctrip.xpipe.redis.keeper.ratelimit.SyncRateManager;
 import com.ctrip.xpipe.utils.VisibleForTesting;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
@@ -31,6 +33,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -57,6 +60,10 @@ public class KeeperContainerService extends AbstractLifecycle implements TopElem
     private GeneralRedisOpParser redisOpParser;
     @Autowired
     private DiskHealthChecker diskHealthChecker;
+    @Autowired
+    private SyncRateManager syncRateManager;
+    @Autowired
+    private ReplDelayConfigCache replDelayConfigCache;
 
     private Map<String, RedisKeeperServer> redisKeeperServers = Maps.newConcurrentMap();
 
@@ -106,7 +113,8 @@ public class KeeperContainerService extends AbstractLifecycle implements TopElem
 
                     File baseDir = getReplicationStoreDir(keeperMeta);
                     RedisKeeperServer redisKeeperServer = new DefaultRedisKeeperServer(keeperTransMeta.getReplId(), keeperMeta,
-                            keeperConfig, baseDir, leaderElectorManager, keepersMonitorManager, resourceManager, redisOpParser);
+                            keeperConfig, baseDir, leaderElectorManager, keepersMonitorManager, resourceManager, syncRateManager,
+                            redisOpParser, replDelayConfigCache);
 
                     try {
                         register(redisKeeperServer);
@@ -179,11 +187,31 @@ public class KeeperContainerService extends AbstractLifecycle implements TopElem
 
         if (!keeperServer.getLifecycleState().isStarted()) {
             throw new RedisKeeperRuntimeException(
-                    new ErrorMessage<>(KeeperContainerErrorCode.KEEPER_ALREADY_STARTED,
+                    new ErrorMessage<>(KeeperContainerErrorCode.KEEPER_NOT_STARTED,
                             String.format("Keeper for %s has not started", replId)), null);
         }
 
         keeperServer.resetElection();
+    }
+
+    public void releaseRdb(ReplId replId) throws IOException {
+        String keeperServerKey = replId.toString();
+
+        RedisKeeperServer keeperServer = redisKeeperServers.get(keeperServerKey);
+
+        if (keeperServer == null) {
+            throw new RedisKeeperRuntimeException(
+                    new ErrorMessage<>(KeeperContainerErrorCode.KEEPER_NOT_EXIST,
+                            String.format("Release rdb for %s failed since keeper doesn't exist", replId)), null);
+        }
+
+        if (!keeperServer.getLifecycleState().isStarted()) {
+            throw new RedisKeeperRuntimeException(
+                    new ErrorMessage<>(KeeperContainerErrorCode.KEEPER_NOT_STARTED,
+                            String.format("Keeper for %s has not started", replId)), null);
+        }
+
+        keeperServer.releaseRdb();
     }
 
     public void start(ReplId replId) {
@@ -278,9 +306,7 @@ public class KeeperContainerService extends AbstractLifecycle implements TopElem
 
     private void enrichKeeperMetaFromKeeperTransMeta(KeeperMeta keeperMeta, KeeperTransMeta keeperTransMeta) {
         ClusterMeta clusterMeta = new ClusterMeta().setDbId(keeperTransMeta.getClusterDbId());
-        clusterMeta.setDbId(keeperTransMeta.getClusterDbId());
         ShardMeta shardMeta = new ShardMeta().setDbId(keeperTransMeta.getShardDbId());
-        shardMeta.setDbId(keeperTransMeta.getShardDbId());
         shardMeta.setParent(clusterMeta);
         keeperMeta.setParent(shardMeta);
     }
@@ -289,7 +315,8 @@ public class KeeperContainerService extends AbstractLifecycle implements TopElem
                                                       File baseDir) throws Exception {
 
         RedisKeeperServer redisKeeperServer = new DefaultRedisKeeperServer(replId, keeper, keeperConfig,
-                baseDir, leaderElectorManager, keepersMonitorManager, resourceManager, redisOpParser);
+                baseDir, leaderElectorManager, keepersMonitorManager, resourceManager, syncRateManager,
+                redisOpParser, replDelayConfigCache);
 
         register(redisKeeperServer);
         return redisKeeperServer;

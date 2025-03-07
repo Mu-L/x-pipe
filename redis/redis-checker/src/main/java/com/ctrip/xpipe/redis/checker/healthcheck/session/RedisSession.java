@@ -13,6 +13,7 @@ import com.ctrip.xpipe.redis.core.protocal.cmd.*;
 import com.ctrip.xpipe.redis.core.protocal.cmd.pubsub.*;
 import com.ctrip.xpipe.redis.core.protocal.pojo.RedisInfo;
 import com.ctrip.xpipe.redis.core.protocal.pojo.Role;
+import com.ctrip.xpipe.utils.VisibleForTesting;
 import com.google.common.collect.Sets;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -62,6 +63,9 @@ public class RedisSession {
         logger.info("session command timeout {}:{} {}", endpoint.getHost(), endpoint.getPort(), commandTimeOut);
     }
 
+    public RedisSession() {
+    }
+
     public void check() {
 
         for (Map.Entry<Set<String>, PubSubConnectionWrapper> entry : subscribConns.entrySet()) {
@@ -79,6 +83,8 @@ public class RedisSession {
                 Subscribe command = pubSubConnectionWrapper.command.get();
                 if (command instanceof CRDTSubscribeCommand) {
                     crdtsubscribeIfAbsent(pubSubConnectionWrapper.getCallback(), channelArray);
+                } else if (command instanceof PsubscribeCommand) {
+                    psubscribeIfAbsent(pubSubConnectionWrapper.getCallback(), channelArray);
                 } else {
                     subscribeIfAbsent(pubSubConnectionWrapper.getCallback(), channelArray);
                 }
@@ -103,6 +109,10 @@ public class RedisSession {
 
     public synchronized void crdtsubscribeIfAbsent(SubscribeCallback callback, String... channel) {
         subscribeIfAbsent(callback, () -> new CRDTSubscribeCommand(clientPool, scheduled, commandTimeOut, channel), channel);
+    }
+
+    public synchronized void psubscribeIfAbsent(SubscribeCallback callback, String... channel) {
+        subscribeIfAbsent(callback, () -> new PsubscribeCommand(clientPool, scheduled, commandTimeOut, channel), channel);
     }
 
     private synchronized void subscribeIfAbsent(SubscribeCallback callback, Supplier<Subscribe> subCommandSupplier, String... channel) {
@@ -350,7 +360,15 @@ public class RedisSession {
 
     @Override
     public String toString() {
-        return String.format("%s", endpoint.toString());
+        if (endpoint != null) {
+            return String.format("%s", endpoint);
+        }
+        return "";
+    }
+
+    @VisibleForTesting
+    public void setEndpoint(Endpoint endpoint) {
+        this.endpoint = endpoint;
     }
 
     public interface RollCallback {
@@ -443,6 +461,11 @@ public class RedisSession {
             try {
                 connectionWrapper.closeAndClean();
             } catch (Exception ignore) {}
+        }
+        try {
+            clientPool.clear();
+        } catch (Throwable th) {
+            logger.info("[closeConnection][{}] fail", endpoint, th);
         }
     }
 

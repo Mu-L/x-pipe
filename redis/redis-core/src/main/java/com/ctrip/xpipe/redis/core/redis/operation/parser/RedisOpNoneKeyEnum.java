@@ -15,7 +15,12 @@ public enum RedisOpNoneKeyEnum {
     EXEC(RedisOpType.EXEC),
     SCRIPT(RedisOpType.SCRIPT),
 
-    UNKNOW(RedisOpType.UNKNOWN);
+    UNKNOW(RedisOpType.UNKNOWN),
+
+    //crdt
+    CRDT_MULTI(RedisOpType.CRDT_MULTI),
+    CRDT_EXEC(RedisOpType.CRDT_EXEC),
+    CRDT_SELECT(RedisOpType.CRDT_SELECT);
 
     private RedisOpType redisOpType;
 

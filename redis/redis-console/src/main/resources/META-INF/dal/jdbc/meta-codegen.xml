@@ -16,6 +16,7 @@
     <member name="cluster-admin-emails" field="cluster_admin_emails" value-type="String" length="1024" />
     <member name="cluster-designated-route-ids" field="cluster_designated_route_ids" value-type="String" length="1024" nullable="false" />
     <member name="create-time" field="create_time" value-type="Date" />
+    <member name="tag" field="tag" value-type="String" length="32" nullable="false" />
     <var name="key-id" value-type="long" key-member="id" />
     <primary-key name="PRIMARY" members="id" />
     <index name="cluster_name" unique="true" members="cluster_name ASC" />
@@ -203,6 +204,7 @@
     <member name="deleted" field="deleted" value-type="boolean" nullable="false" />
     <member name="keepercontainer-org-id" field="keepercontainer_org_id" value-type="long" length="20" nullable="false" />
     <member name="keepercontainer_disk_type" field="keepercontainer_disk_type" value-type="String" length="40" nullable="false" />
+    <member name="tag" field="tag" value-type="String" length="32" nullable="false" />
     <var name="key-keepercontainer-id" value-type="long" key-member="keepercontainer-id" />
     <primary-key name="PRIMARY" members="keepercontainer_id" />
     <index name="DataChange_LastTime" members="DataChange_LastTime ASC" />
@@ -974,6 +976,7 @@
   <entity name="route-tbl" table="route_tbl" alias="rt2">
     <member name="id" field="id" value-type="long" length="20" nullable="false" key="true" auto-increment="true" />
     <member name="route-org-id" field="route_org_id" value-type="long" length="20" nullable="false" />
+    <member name="cluster-type" field="cluster_type" value-type="String" length="32" nullable="false" />
     <member name="src-dc-id" field="src_dc_id" value-type="long" length="20" nullable="false" />
     <member name="dst-dc-id" field="dst_dc_id" value-type="long" length="20" nullable="false" />
     <member name="src-proxy-ids" field="src_proxy_ids" value-type="String" length="128" nullable="false" />
@@ -1021,9 +1024,11 @@
   <entity name="sentinel-group-tbl" table="sentinel_group_tbl" alias="sgt">
     <member name="sentinel-group-id" field="sentinel_group_id" value-type="long" length="19" nullable="false" key="true" auto-increment="true" />
     <member name="cluster-type" field="cluster_type" value-type="String" length="40" nullable="false" />
-    <member name="deleted" field="deleted" value-type="int" length="3" nullable="false" />
+    <member name="deleted" field="deleted" value-type="int" length="4" nullable="false" />
+    <member name="active" field="active" value-type="int" length="4" nullable="false" />
     <member name="datachange-lasttime" field="datachange_lasttime" value-type="Date" nullable="false" />
     <member name="sentinel-description" field="sentinel_description" value-type="String" length="100" nullable="false" />
+    <member name="tag" field="tag" value-type="String" length="32" nullable="false" />
     <var name="key-sentinel-group-id" value-type="long" key-member="sentinel-group-id" />
     <primary-key name="PRIMARY" members="sentinel_group_id" />
     <index name="ix_DataChange_LastTime" members="datachange_lasttime ASC" />

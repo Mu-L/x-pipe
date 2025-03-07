@@ -157,6 +157,16 @@ function router($stateProvider, $urlRouterProvider) {
         	templateUrl: 'views/index/migration_list.html',
         	controller: 'ActiveDcMigrationEventListCtl'
         })
+        .state('bi_migration', {
+            url: '/bi_migration',
+            templateUrl: 'views/index/bi_migration.html',
+            controller: 'BiMigrationCtl'
+        })
+        .state('bi_migration_event_list', {
+            url: '/bi_migration_event_list?clusterName',
+            templateUrl: 'views/index/bi_migration_list.html',
+            controller: 'BiMigrationEventListCtl'
+        })
         .state('migration_event_details', {
         	url: '/migration_event_details/:eventId',
             params: {
@@ -183,6 +193,11 @@ function router($stateProvider, $urlRouterProvider) {
             url: '/repl_directions',
             templateUrl: 'views/index/repl_direction_list.html',
             controller : 'ReplDirectionListCtl',
+        })
+        .state('search_shard', {
+            url: '/search_shard',
+            templateUrl: 'views/index/search_shard.html',
+            controller : 'SearchShardCtl',
         })
         .state('keepercontainer_list', {
             url: '/keepercontainers',
@@ -223,6 +238,16 @@ function router($stateProvider, $urlRouterProvider) {
             url: '/keepercontainer_overall?keepercontainerIp',
             templateUrl: 'views/index/keepercontainer_overall.html',
             controller: 'KeepercontainerOverallCtl'
+        })
+        .state('keepercontainer_keeper_overall',{
+            url: '/keepercontainer_keeper_overall?ip',
+            templateUrl: 'views/index/keepercontainer_keeper_overall.html',
+            controller: 'KeeperContainerKeeperOverAllCtl'
+        })
+        .state('full_link_health_check',{
+            url: '/full_link_health_check?currentDcName&clusterName&shardName&shardId',
+            templateUrl: 'views/index/full_link_health_check.html',
+            controller: 'FullLinkHealthCheckCtl'
         });
 
 }

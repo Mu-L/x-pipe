@@ -1,23 +1,31 @@
 package com.ctrip.xpipe.redis.checker.healthcheck.factory;
 
+import com.ctrip.framework.xpipe.redis.ProxyChecker;
 import com.ctrip.framework.xpipe.redis.ProxyRegistry;
 import com.ctrip.framework.xpipe.redis.proxy.ProxyInetSocketAddress;
 import com.ctrip.framework.xpipe.redis.proxy.ProxyResourceManager;
 import com.ctrip.xpipe.api.endpoint.Endpoint;
 import com.ctrip.xpipe.api.proxy.ProxyEnabled;
 import com.ctrip.xpipe.endpoint.HostPort;
+import com.ctrip.xpipe.redis.checker.config.CheckerConfig;
 import com.ctrip.xpipe.redis.checker.healthcheck.impl.DefaultHealthCheckEndpointFactory;
 import com.ctrip.xpipe.redis.core.AbstractRedisTest;
+import com.ctrip.xpipe.redis.core.entity.ClusterMeta;
+import com.ctrip.xpipe.redis.core.entity.DcMeta;
 import com.ctrip.xpipe.redis.core.entity.RouteMeta;
 import com.ctrip.xpipe.redis.core.meta.MetaCache;
+import com.ctrip.xpipe.redis.core.meta.XpipeMetaManager;
+import com.ctrip.xpipe.redis.core.route.RouteChooseStrategyFactory;
+import com.ctrip.xpipe.redis.core.route.impl.DefaultRouteChooseStrategyFactory;
 import com.ctrip.xpipe.utils.StringUtil;
 import com.google.common.collect.Lists;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
-import org.mockito.InjectMocks;
+import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.Mockito;
+import org.mockito.junit.MockitoJUnitRunner;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -30,22 +38,30 @@ import static org.mockito.Mockito.when;
  * <p>
  * Sep 04, 2018
  */
+@RunWith(MockitoJUnitRunner.Silent.class)
 public class DefaultHealthCheckEndpointFactoryTest extends AbstractRedisTest {
 
-    @InjectMocks
-    private DefaultHealthCheckEndpointFactory factory = new DefaultHealthCheckEndpointFactory();
+    private DefaultHealthCheckEndpointFactory factory;
 
     @Mock
     private MetaCache metaCache;
 
+    @Mock
+    ProxyChecker proxyChecker;
+
+    @Mock
+    CheckerConfig config;
+
+    RouteChooseStrategyFactory routeChooseStrategyFactory = new DefaultRouteChooseStrategyFactory();
+
     @Before
     public void beforeDefaultHealthCheckEndpointFactoryTest() {
-        MockitoAnnotations.initMocks(this);
+        this.factory = new DefaultHealthCheckEndpointFactory(proxyChecker, config, metaCache, routeChooseStrategyFactory);
     }
 
     @Test
     public void testGetOrCreateEndpoint() {
-        when(metaCache.getRoutes()).thenReturn(null);
+        when(metaCache.getCurrentDcConsoleRoutes()).thenReturn(null);
         HostPort hostport = localHostport(randomPort());
         when(metaCache.getDc(hostport)).thenReturn("oy");
         Endpoint endpoint = factory.getOrCreateEndpoint(hostport);
@@ -60,11 +76,18 @@ public class DefaultHealthCheckEndpointFactoryTest extends AbstractRedisTest {
     public void testGetOrCreateEndpointWithProxyProtocol() {
         String routeInfo1 = "PROXYTCP://127.0.0.1:8008,PROXYTCP://127.0.0.1:8998";
         String routeInfo2 = "PROXYTCP://127.0.0.2:8008,PROXYTCP://127.0.0.2:8998";
-        RouteMeta routeMeta1 = new RouteMeta().setRouteInfo(routeInfo1).setDstDc("oy").setIsPublic(true);
-        RouteMeta routeMeta2 = new RouteMeta().setRouteInfo(routeInfo2).setDstDc("oy").setIsPublic(false);
-        when(metaCache.getRoutes()).thenReturn(Lists.newArrayList(routeMeta1, routeMeta2));
+        RouteMeta routeMeta1 = new RouteMeta().setRouteInfo(routeInfo1).setDstDc("oy").setIsPublic(true).setClusterType("").setOrgId(0);
+        RouteMeta routeMeta2 = new RouteMeta().setRouteInfo(routeInfo2).setDstDc("oy").setIsPublic(false).setClusterType("").setOrgId(0);
+        DcMeta dcMeta = new DcMeta("oy");
+        ClusterMeta clusterMeta = new ClusterMeta("cluster1").setType("one_way").setOrgId(1);
+        dcMeta.addCluster(clusterMeta);
+        XpipeMetaManager.MetaDesc metaDesc = Mockito.mock(XpipeMetaManager.MetaDesc.class);
+        when(metaDesc.getClusterMeta()).thenReturn(clusterMeta);
+        when(metaDesc.getDcId()).thenReturn("oy");
+        when(metaCache.getCurrentDcConsoleRoutes()).thenReturn(Lists.newArrayList(routeMeta1, routeMeta2));
         HostPort hostport = localHostport(randomPort());
         when(metaCache.getDc(hostport)).thenReturn("oy");
+        when(metaCache.findMetaDesc(hostport)).thenReturn(metaDesc);
         factory.updateRoutes();
         Endpoint endpoint = factory.getOrCreateEndpoint(hostport);
 //        Assert.assertTrue(endpoint instanceof ProxyEnabled);
@@ -137,27 +160,27 @@ public class DefaultHealthCheckEndpointFactoryTest extends AbstractRedisTest {
     }
 
     @Test
-    public void testSelectRoute() {
-        for (int routesize = 1; routesize < 100; routesize++) {
-            List<RouteMeta> routes = new ArrayList<>();
-            for (int i = 0; i < routesize; i++) {
-                routes.add(new RouteMeta());
-            }
-            for (int randomsize = 0; randomsize < 10000; randomsize++) {
-                HostPort endpoint = new HostPort(String.format("%d.%d.%d.%d",
-                        (int) (Math.random() * 256),
-                        (int) (Math.random() * 256),
-                        (int) (Math.random() * 256),
-                        (int) (Math.random() * 256)),
-                        (int) (Math.random() * 65536));
-                RouteMeta meta = factory.selectRoute(routes, endpoint);
-                Assert.assertNotNull(meta);
-            }
-        }
+    public void testCreateInstanceBeforeChooserInited() {
+        String routeInfo1 = "PROXYTCP://127.0.0.1:8008,PROXYTCP://127.0.0.1:8998";
+        RouteMeta routeMeta1 = new RouteMeta().setRouteInfo(routeInfo1).setDstDc("oy").setIsPublic(true).setClusterType("").setOrgId(0);
+        DcMeta dcMeta = new DcMeta("oy");
+        ClusterMeta clusterMeta = new ClusterMeta("cluster1").setType("one_way").setOrgId(1);
+        dcMeta.addCluster(clusterMeta);
+        XpipeMetaManager.MetaDesc metaDesc = Mockito.mock(XpipeMetaManager.MetaDesc.class);
+        when(metaDesc.getClusterMeta()).thenReturn(clusterMeta);
+        when(metaDesc.getDcId()).thenReturn("oy");
+        when(metaCache.getCurrentDcConsoleRoutes()).thenReturn(Lists.newArrayList(routeMeta1));
+        HostPort hostport = localHostport(randomPort());
+        when(metaCache.findMetaDesc(hostport)).thenReturn(metaDesc);
+
+        Endpoint endpoint = factory.getOrCreateEndpoint(hostport);
+        Assert.assertEquals(hostport.getHost(), endpoint.getHost());
+        Assert.assertEquals(hostport.getPort(), endpoint.getPort());
+
+        ProxyResourceManager proxyResourceManager = ProxyRegistry.getProxy(hostport.getHost(), hostport.getPort());
+        Assert.assertNotNull(proxyResourceManager);
+
     }
 
-        @Test
-    public void testChecker() {
-        
-    }
+
 }

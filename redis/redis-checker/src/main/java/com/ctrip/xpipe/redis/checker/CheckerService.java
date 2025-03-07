@@ -6,6 +6,7 @@ import com.ctrip.xpipe.redis.checker.healthcheck.actions.interaction.HealthStatu
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * @author lishanglin
@@ -17,6 +18,12 @@ public interface CheckerService {
 
     HEALTH_STATE getInstanceStatus(String ip, int port);
 
+    HEALTH_STATE getCrossRegionInstanceStatus(String ip, int port);
+
     Map<HostPort, HealthStatusDesc> getAllInstanceHealthStatus();
+
+    Map<HostPort, HealthStatusDesc> getAllInstanceCrossRegionHealthStatus();
+
+    Map<HostPort, HealthStatusDesc> getAllClusterInstanceHealthStatus(Set<HostPort> hostPorts);
 
 }

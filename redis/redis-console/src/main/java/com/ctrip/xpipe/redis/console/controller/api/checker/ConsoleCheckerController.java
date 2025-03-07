@@ -2,44 +2,40 @@ package com.ctrip.xpipe.redis.console.controller.api.checker;
 
 import com.ctrip.xpipe.api.migration.OuterClientService;
 import com.ctrip.xpipe.api.server.Server;
-import com.ctrip.xpipe.redis.checker.CheckerConsoleService;
-import com.ctrip.xpipe.redis.checker.OuterClientCache;
-import com.ctrip.xpipe.redis.checker.PersistenceCache;
-import com.ctrip.xpipe.redis.checker.ProxyManager;
+import com.ctrip.xpipe.endpoint.HostPort;
+import com.ctrip.xpipe.redis.checker.*;
+import com.ctrip.xpipe.redis.checker.config.CheckerDbConfig;
 import com.ctrip.xpipe.redis.checker.controller.result.RetMessage;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.interaction.HealthStateService;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.ping.PingService;
 import com.ctrip.xpipe.redis.checker.healthcheck.impl.DefaultRedisHealthCheckInstance;
 import com.ctrip.xpipe.redis.checker.healthcheck.impl.DefaultRedisInstanceInfo;
-import com.ctrip.xpipe.redis.checker.model.CheckerStatus;
-import com.ctrip.xpipe.redis.checker.model.HealthCheckResult;
-import com.ctrip.xpipe.redis.checker.model.KeeperContainerUsedInfoModel;
-import com.ctrip.xpipe.redis.checker.model.ProxyTunnelInfo;
+import com.ctrip.xpipe.redis.checker.model.*;
 import com.ctrip.xpipe.redis.checker.spring.ConsoleServerMode;
 import com.ctrip.xpipe.redis.checker.spring.ConsoleServerModeCondition;
 import com.ctrip.xpipe.redis.console.checker.CheckerManager;
+import com.ctrip.xpipe.redis.console.config.ConsoleConfig;
 import com.ctrip.xpipe.redis.console.controller.AbstractConsoleController;
 import com.ctrip.xpipe.redis.console.healthcheck.nonredis.cluster.ClusterHealthMonitorManager;
-import com.ctrip.xpipe.redis.console.keeper.KeeperContainerUsedInfoAnalyzer;
+import com.ctrip.xpipe.redis.console.keeper.impl.KeeperContainerUsedInfoMsgCollector;
 import com.ctrip.xpipe.redis.console.service.CrossMasterDelayService;
 import com.ctrip.xpipe.redis.console.service.DelayService;
 import com.ctrip.xpipe.redis.console.service.impl.AlertEventService;
 import com.ctrip.xpipe.redis.core.console.ConsoleCheckerPath;
-import com.ctrip.xpipe.redis.core.entity.DcMeta;
-import com.ctrip.xpipe.redis.core.entity.XpipeMeta;
+import com.ctrip.xpipe.redis.core.entity.*;
 import com.ctrip.xpipe.redis.core.meta.MetaCache;
+import com.ctrip.xpipe.spring.AbstractSpringConfigContext;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.context.request.async.DeferredResult;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
-import java.util.Date;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
+import java.util.concurrent.ExecutorService;
 
 /**
  * @author lishanglin
@@ -48,6 +44,9 @@ import java.util.Set;
 @RestController
 @ConsoleServerMode(ConsoleServerModeCondition.SERVER_MODE.CONSOLE)
 public class ConsoleCheckerController extends AbstractConsoleController {
+
+    @Resource(name = AbstractSpringConfigContext.GLOBAL_EXECUTOR)
+    private ExecutorService executors;
 
     @Autowired
     private MetaCache metaCache;
@@ -77,9 +76,14 @@ public class ConsoleCheckerController extends AbstractConsoleController {
     private OuterClientCache outerClientCache;
 
     @Autowired
-    private KeeperContainerUsedInfoAnalyzer keeperContainerUsedInfoAnalyzer;
+    private CheckerDbConfig checkerDbConfig;
+
+    @Autowired
+    private KeeperContainerUsedInfoMsgCollector keeperContainerUsedInfoMsgCollector;
 
     private Logger logger = LoggerFactory.getLogger(ConsoleCheckerController.class);
+    @Autowired
+    private ConsoleConfig consoleConfig;
 
     @GetMapping(ConsoleCheckerPath.PATH_GET_META)
     public String getDividedMeta(@PathVariable int index, @RequestParam(value="format", required = false) String format) {
@@ -92,6 +96,27 @@ public class ConsoleCheckerController extends AbstractConsoleController {
     public String getDividedMeta(@RequestParam(value="format", required = false) String format) {
         XpipeMeta xpipeMeta = metaCache.getXpipeMeta();
         return (format != null && format.equals("xml"))? xpipeMeta.toString() : coder.encode(xpipeMeta);
+    }
+
+    @GetMapping(ConsoleCheckerPath.PATH_GET_ALL_META_LONG_PULL)
+    public DeferredResult<byte []> getDividedMetaLongPull(@RequestParam(value="format", required = false) String format,
+                                                         @RequestParam(value="version") long version) {
+        DeferredResult<byte []> response = new DeferredResult<>(Long.valueOf(consoleConfig.getServletMethodTimeoutMilli()));
+
+        executors.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    XpipeMeta xpipeMeta = metaCache.getXpipeMetaLongPull(version);
+                    String result = format != null && format.equals("xml")? xpipeMeta.toString() : coder.encode(xpipeMeta);
+                    response.setResult(result.getBytes());
+                } catch (InterruptedException e) {
+                    response.setErrorResult(e.getMessage());
+                }
+            }
+        });
+
+        return response;
     }
 
     @GetMapping(ConsoleCheckerPath.PATH_GET_DC_ALL_META)
@@ -126,15 +151,14 @@ public class ConsoleCheckerController extends AbstractConsoleController {
     }
 
     @PostMapping(ConsoleCheckerPath.PATH_POST_KEEPER_CONTAINER_INFO_RESULT)
-    public void updateKeeperContainerUsedInfo(HttpServletRequest request, @PathVariable int index, @RequestBody List<KeeperContainerUsedInfoModel> keeperContainerUsedInfoModels) {
-        logger.debug("[updateKeeperContainerUsedInfo][{}] {}", request.getRemoteAddr(), keeperContainerUsedInfoModels);
-        keeperContainerUsedInfoAnalyzer.updateKeeperContainerUsedInfo(index, keeperContainerUsedInfoModels);
+    public void updateKeeperContainerUsedInfo(@PathVariable int index, @RequestBody Map<HostPort, RedisMsg> masterDcRedisMsgMap) {
+        keeperContainerUsedInfoMsgCollector.saveMsg(index, masterDcRedisMsgMap);
     }
 
 
     @Resource
     PersistenceCache persistenceCache;
-    
+
     @RequestMapping(value = ConsoleCheckerPath.PATH_GET_IS_CLUSTER_ON_MIGRATION, method = RequestMethod.GET)
     public boolean isClusterOnMigration(@PathVariable String clusterName) {
         return persistenceCache.isClusterOnMigration(clusterName);
@@ -199,8 +223,13 @@ public class ConsoleCheckerController extends AbstractConsoleController {
     }
 
     @GetMapping(value = ConsoleCheckerPath.PATH_GET_ALL_CURRENT_DC_ACTIVE_DC_ONE_WAY_CLUSTERS)
-    public Map<String, OuterClientService.ClusterInfo> loadAllOuterClientClusters(@RequestParam String activeDc) {
-        return outerClientCache.getAllActiveDcClusters(activeDc);
+    public Map<String, OuterClientService.ClusterInfo> loadAllOuterClientClusters(@RequestParam String dc) {
+        return outerClientCache.getAllDcClusters(dc);
+    }
+
+    @GetMapping(value = ConsoleCheckerPath.PATH_GET_ALL_CURRENT_DC_ONE_WAY_CLUSTERS)
+    public Map<String, OuterClientService.ClusterInfo> loadCurrentDcOuterClientClusters(@RequestParam String dc) {
+        return outerClientCache.getAllCurrentDcClusters(dc);
     }
 
 

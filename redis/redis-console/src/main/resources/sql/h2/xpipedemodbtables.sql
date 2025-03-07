@@ -98,6 +98,7 @@ create table CLUSTER_TBL (
     cluster_last_modified_time varchar(40) not null default '20230101000000000',
     DataChange_LastTime timestamp default CURRENT_TIMESTAMP,
 	deleted tinyint(1) not null default 0,
+    tag varchar(32) not null default '',
 );
 
 
@@ -196,7 +197,8 @@ create table KEEPERCONTAINER_TBL
     DataChange_LastTime timestamp default CURRENT_TIMESTAMP,
 	deleted tinyint(1) not null default 0,
 	keepercontainer_org_id bigint(20) unsigned NOT NULL DEFAULT 0,
-    keepercontainer_disk_type varchar(64) not null default 'default'
+    keepercontainer_disk_type varchar(64) not null default 'default',
+    tag varchar(32) not null default '',
 );
 
 -- Migration Event Table
@@ -291,6 +293,7 @@ CREATE TABLE `route_tbl` (
   `route_org_id` bigint(20) unsigned not null default 0,
   `src_dc_id` bigint(20) unsigned not null,
   `dst_dc_id` bigint(20) unsigned not null,
+  `cluster_type` varchar(32) not null default '',
   `src_proxy_ids` varchar(128) not null default '',
   `dst_proxy_ids` varchar(128) not null default '',
   `optional_proxy_ids` varchar(128) not null default '',
@@ -344,8 +347,10 @@ CREATE TABLE `sentinel_group_tbl`
     `sentinel_group_id`   bigint(20) NOT NULL AUTO_INCREMENT primary key,
     `cluster_type`        varchar(40)  NOT NULL DEFAULT '',
     `deleted`             tinyint(4) NOT NULL DEFAULT '0',
+    `active`             tinyint(4) NOT NULL DEFAULT '1',
     `datachange_lasttime` timestamp default CURRENT_TIMESTAMP,
     `sentinel_description` varchar(100)  NOT NULL DEFAULT '',
+    `tag`                  varchar(32) not null default '',
 ) ;
 
 -- sentinel_tbl
@@ -402,4 +407,17 @@ CREATE TABLE `applier_tbl` (
   DataChange_LastTime timestamp default CURRENT_TIMESTAMP,
   deleted tinyint(1) NOT NULL DEFAULT 0,
   deleted_at int NOT NULL DEFAULT 0,
+);
+
+-- migration_bi_cluster_tbl
+drop table if exists migration_bi_cluster_tbl;
+CREATE TABLE `migration_bi_cluster_tbl` (
+  id bigint(20) NOT NULL AUTO_INCREMENT primary key,
+  cluster_id bigint(20) NOT NULL DEFAULT 0,
+  operation_time timestamp default CURRENT_TIMESTAMP,
+  operator varchar(128) not null default 'xpipe',
+  status varchar(16) not null default 'unknown',
+  publish_info varchar(10240) not null default '',
+  DataChange_LastTime timestamp default CURRENT_TIMESTAMP,
+  deleted tinyint(1) NOT NULL DEFAULT 0,
 );

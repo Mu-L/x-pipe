@@ -3,14 +3,21 @@ package com.ctrip.xpipe.redis.console.migration.auto;
 import com.ctrip.xpipe.api.codec.GenericTypeReference;
 import com.ctrip.xpipe.api.migration.auto.MonitorService;
 import com.ctrip.xpipe.api.migration.auto.MonitorServiceFactory;
+import com.ctrip.xpipe.cluster.ClusterType;
 import com.ctrip.xpipe.codec.JsonCodec;
 import com.ctrip.xpipe.redis.checker.spring.ConsoleServerModeCondition;
 import com.ctrip.xpipe.redis.console.config.ConsoleConfig;
-import com.ctrip.xpipe.redis.console.config.impl.DefaultConsoleConfig;
 import com.ctrip.xpipe.redis.console.config.model.BeaconClusterRoute;
 import com.ctrip.xpipe.redis.console.config.model.BeaconOrgRoute;
 import com.ctrip.xpipe.redis.console.constant.XPipeConsoleConstant;
+import com.ctrip.xpipe.redis.core.beacon.BeaconSystem;
+import com.ctrip.xpipe.redis.core.config.ConsoleCommonConfig;
+import com.ctrip.xpipe.redis.core.entity.ClusterMeta;
+import com.ctrip.xpipe.redis.core.entity.DcMeta;
+import com.ctrip.xpipe.redis.core.entity.XpipeMeta;
 import com.ctrip.xpipe.redis.core.meta.MetaCache;
+import com.ctrip.xpipe.utils.StringUtil;
+import com.ctrip.xpipe.utils.VisibleForTesting;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.collections.MapUtils;
 import org.slf4j.Logger;
@@ -18,12 +25,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+
+import static com.ctrip.xpipe.redis.checker.config.impl.DataCenterConfigBean.KEY_BEACON_ORG_ROUTE;
+import static com.ctrip.xpipe.redis.console.constant.XPipeConsoleConstant.DEFAULT_ORG_ID;
 
 /**
  * @author lishanglin
@@ -36,6 +43,8 @@ public class DefaultMonitorManager implements MonitorManager {
 
     private final ConsoleConfig config;
 
+    private final ConsoleCommonConfig consoleCommonConfig;
+
     private Map<Long, DefaultMonitorClusterManager> orgMonitorMap;
 
     private static final int CONSISTENT_HASH_VIRTUAL_NODE_NUM = 100;
@@ -43,9 +52,10 @@ public class DefaultMonitorManager implements MonitorManager {
     private static final Logger logger = LoggerFactory.getLogger(DefaultMonitorManager.class);
 
     @Autowired
-    public DefaultMonitorManager(MetaCache metaCache, ConsoleConfig config) {
+    public DefaultMonitorManager(MetaCache metaCache, ConsoleConfig config, ConsoleCommonConfig consoleCommonConfig) {
         this.metaCache = metaCache;
         this.config = config;
+        this.consoleCommonConfig = consoleCommonConfig;
         this.init();
     }
 
@@ -66,7 +76,7 @@ public class DefaultMonitorManager implements MonitorManager {
             }));
 
         // 注册beacon.org.routes配置监听
-        this.config.register(Collections.singletonList(DefaultConsoleConfig.KEY_BEACON_ORG_ROUTE),
+        this.config.register(Collections.singletonList(KEY_BEACON_ORG_ROUTE),
             ((key, oldValue, newValue) -> {
                 logger.info("key: {}, oldValue: {}, newValue{}", key, oldValue, newValue);
                 List<BeaconOrgRoute> oldOrgRoutes = JsonCodec.INSTANCE
@@ -117,6 +127,7 @@ public class DefaultMonitorManager implements MonitorManager {
                             monitorClusterManager.removeService(service);
                         } else if (!newClusterRoute.equals(oldClusterRoute)) {
                             monitorClusterManager.updateServiceWeight(service, newClusterRoute.getWeight());
+                            service.updateHost(newClusterRoute.getHost());
                         }
                     });
                     newHostRouteMap.forEach((name, newClusterRoute) -> {
@@ -152,6 +163,53 @@ public class DefaultMonitorManager implements MonitorManager {
         Map<Long, List<MonitorService>> map = new HashMap<>();
         this.orgMonitorMap.forEach((orgId, monitor) -> map.put(orgId, monitor.getServices()));
         return map;
+    }
+
+    @Override
+    public Map<BeaconSystem, Map<Long, Set<String>>> clustersByBeaconSystemOrg() {
+        Set<Long> orgIds = this.getAllServices().keySet();
+        XpipeMeta xpipeMeta = metaCache.getXpipeMeta();
+        if (null == xpipeMeta) return null;
+
+        Map<BeaconSystem, Map<Long, Set<String>>> clusterByBeaconSystemOrg = new HashMap<>();
+        for (BeaconSystem beaconSystem : BeaconSystem.values()) {
+            Map<Long, Set<String>> clustersByOrg = new HashMap<>(orgIds.size());
+            orgIds.forEach(orgId -> clustersByOrg.put(orgId, new HashSet<>()));
+            clusterByBeaconSystemOrg.put(beaconSystem, clustersByOrg);
+        }
+
+        Set<String> supportZones = consoleCommonConfig.getBeaconSupportZones();
+        for (DcMeta dcMeta : xpipeMeta.getDcs().values()) {
+            if (!supportZones.isEmpty() && supportZones.stream().noneMatch(zone -> zone.equalsIgnoreCase(dcMeta.getZone()))) {
+                logger.debug("[separateClustersByOrg][zoneUnsupported] {} not in {}", dcMeta.getId(), supportZones);
+                continue;
+            }
+
+            for (ClusterMeta clusterMeta : dcMeta.getClusters().values()) {
+                ClusterType clusterType = ClusterType.lookup(clusterMeta.getType());
+                if (!StringUtil.isEmpty(clusterMeta.getAzGroupType())) {
+                    clusterType = ClusterType.lookup(clusterMeta.getAzGroupType());
+                }
+
+                BeaconSystem beaconSystem = BeaconSystem.findByClusterType(clusterType);
+                if (null == beaconSystem) {
+                    continue;
+                }
+                if (clusterType.supportSingleActiveDC() && !dcMeta.getId().equalsIgnoreCase(clusterMeta.getActiveDc())) {
+                    // only register cluster whose active dc is in supported zone
+                    continue;
+                }
+
+                Map<Long, Set<String>> clustersByOrg = clusterByBeaconSystemOrg.get(beaconSystem);
+                if (orgIds.contains((long) clusterMeta.getOrgId())) {
+                    clustersByOrg.get((long) clusterMeta.getOrgId()).add(clusterMeta.getId());
+                } else if (orgIds.contains(DEFAULT_ORG_ID)) {
+                    clustersByOrg.get(DEFAULT_ORG_ID).add(clusterMeta.getId());
+                }
+            }
+        }
+
+        return clusterByBeaconSystemOrg;
     }
 
     private MonitorService constructMonitorService(BeaconClusterRoute route) {

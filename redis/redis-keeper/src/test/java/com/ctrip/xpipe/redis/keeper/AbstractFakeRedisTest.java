@@ -18,10 +18,13 @@ import com.ctrip.xpipe.redis.keeper.AbstractRedisKeeperContextTest;
 import com.ctrip.xpipe.redis.keeper.RedisKeeperServer;
 import com.ctrip.xpipe.redis.keeper.config.KeeperConfig;
 import com.ctrip.xpipe.redis.keeper.config.TestKeeperConfig;
+import com.ctrip.xpipe.utils.ObjectUtils;
 import org.junit.Assert;
 import org.junit.Before;
 
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.Map;
 
 /**
  * @author wenchao.meng
@@ -58,7 +61,7 @@ public class AbstractFakeRedisTest extends AbstractRedisKeeperContextTest{
 	protected RedisKeeperServer startRedisKeeperServerAndConnectToFakeRedis(int replicationStoreCommandFileNumToKeep,
 			int replicationStoreMaxCommandsToTransferBeforeCreateRdb, int minTimeMilliToGcAfterCreate) throws Exception {
 
-		RedisKeeperServer redisKeeperServer = startRedisKeeperServer(replicationStoreCommandFileNumToKeep, replicationStoreMaxCommandsToTransferBeforeCreateRdb, 1000);
+		RedisKeeperServer redisKeeperServer = startRedisKeeperServer(replicationStoreCommandFileNumToKeep, replicationStoreMaxCommandsToTransferBeforeCreateRdb, minTimeMilliToGcAfterCreate);
 		connectToFakeRedis(redisKeeperServer);
 		return redisKeeperServer;
 	}
@@ -83,7 +86,7 @@ public class AbstractFakeRedisTest extends AbstractRedisKeeperContextTest{
 				commandFileSize, 
 				replicationStoreCommandFileNumToKeep, 
 				replicationStoreMaxCommandsToTransferBeforeCreateRdb, minTimeMilliToGcAfterCreate);
-
+        ((TestKeeperConfig)keeperConfig).setRdbDumpMinIntervalMilli(0);
 		RedisKeeperServer redisKeeperServer = createRedisKeeperServer(keeperConfig);
 		redisKeeperServer.initialize();
 		redisKeeperServer.start();
@@ -143,20 +146,20 @@ public class AbstractFakeRedisTest extends AbstractRedisKeeperContextTest{
 	}
 
 	protected void waitForPsyncResultEquals(InMemoryPsync psync) throws Exception {
-		waitConditionUntilTimeOut(() -> new String(psync.getRdb()).equals(fakeRedisServer.getRdbContent())
+		waitConditionUntilTimeOut(() -> Arrays.equals(psync.getRdb(), fakeRedisServer.getRdbContent())
 						&& new String(psync.getCommands()).equals(fakeRedisServer.currentCommands()));
 	}
 
 	protected void assertPsyncResultEquals(InMemoryPsync psync) {
 
 		try{
-			Assert.assertEquals(fakeRedisServer.getRdbContent(), new String(psync.getRdb()));
+			Assert.assertArrayEquals(fakeRedisServer.getRdbContent(), psync.getRdb());
 			Assert.assertEquals(fakeRedisServer.currentCommands(), new String(psync.getCommands()));
 		}catch(Exception e){
 			logger.error("[assertPsyncResultEquals]", e);
 		}
 
-		Assert.assertEquals(fakeRedisServer.getRdbContent(), new String(psync.getRdb()));
+		Assert.assertArrayEquals(fakeRedisServer.getRdbContent(), psync.getRdb());
 		Assert.assertEquals(fakeRedisServer.currentCommands(), new String(psync.getCommands()));
 	}
 
@@ -180,74 +183,68 @@ public class AbstractFakeRedisTest extends AbstractRedisKeeperContextTest{
 	}
 
 	protected InMemoryPsync sendInmemoryPsync(String ip, int port, String runid, long offset, PsyncObserver psyncObserver) throws Exception {
-
-		SequenceCommandChain chain = new SequenceCommandChain(false);
-		
 		SimpleObjectPool<NettyClient> pool = getXpipeNettyClientKeyedObjectPool().getKeyPool(new DefaultEndPoint(ip, port));
-		NettyClient nettyClient = null;
-		
-		try{
-			nettyClient = pool.borrowObject();
-			
-			SimpleObjectPool<NettyClient> clientPool = new FixedObjectPool<NettyClient>(nettyClient);  
-			chain.add(new Replconf(clientPool, 
-					ReplConfType.CAPA, scheduled, CAPA.EOF.toString()));
-			InMemoryPsync psync = new InMemoryPsync(clientPool, runid, offset, scheduled);
-			chain.add(psync);
-
-			if(psyncObserver != null){
-				psync.addPsyncObserver(psyncObserver);
-			}
-			psync.addPsyncObserver(new PsyncObserver() {
-				
-				private long masterRdbOffset = 0;
-				@Override
-				public void reFullSync() {
-					
-				}
-				
-				@Override
-				public void onFullSync(long masterRdbOffset) {
-					
-				}
-				
-				@Override
-				public void onContinue(String requestReplId, String responseReplId) {
-					
-				}
-
-				@Override
-				public void onKeeperContinue(String replId, long beginOffset) {
-
-				}
-
-				@Override
-				public void readRdbGtidSet(RdbStore rdbStore, String gtidSet) {
-
-				}
-
-				@Override
-				public void readAuxEnd(RdbStore rdbStore) {
-
-				}
-
-				@Override
-				public void endWriteRdb() {
-					new Replconf(clientPool, ReplConfType.ACK, scheduled, String.valueOf(masterRdbOffset)).execute();
-				}
-				
-				@Override
-				public void beginWriteRdb(EofType eofType, String replId, long masterRdbOffset) throws IOException {
-					this.masterRdbOffset = masterRdbOffset;
-				}
-			});
-			
-			chain.execute();
-			return psync;
-		}finally{
+		NettyClient nettyClient = pool.borrowObject();
+		try {
+			return sendInmemoryPsync(new FixedObjectPool<>(nettyClient), runid, offset, psyncObserver);
+		} finally {
 			if(nettyClient != null){
 				pool.returnObject(nettyClient);
 			}
 		}
+	}
+
+	protected InMemoryPsync sendInmemoryPsync(SimpleObjectPool<NettyClient> clientPool, String runid, long offset, PsyncObserver psyncObserver) throws Exception {
+
+		SequenceCommandChain chain = new SequenceCommandChain(false);
+		chain.add(new Replconf(clientPool,
+				ReplConfType.CAPA, scheduled, CAPA.EOF.toString()));
+		InMemoryPsync psync = new InMemoryPsync(clientPool, runid, offset, scheduled);
+		chain.add(psync);
+
+		if(psyncObserver != null){
+			psync.addPsyncObserver(psyncObserver);
+		}
+		psync.addPsyncObserver(new PsyncObserver() {
+
+			private long masterRdbOffset = 0;
+			@Override
+			public void reFullSync() {
+
+			}
+
+			@Override
+			public void onFullSync(long masterRdbOffset) {
+
+			}
+
+			@Override
+			public void onContinue(String requestReplId, String responseReplId) {
+
+			}
+
+			@Override
+			public void onKeeperContinue(String replId, long beginOffset) {
+
+			}
+
+			@Override
+			public void readAuxEnd(RdbStore rdbStore, Map<String, String> auxMap) {
+
+			}
+
+			@Override
+			public void endWriteRdb() {
+				new Replconf(clientPool, ReplConfType.ACK, scheduled, String.valueOf(masterRdbOffset)).execute();
+			}
+
+			@Override
+			public void beginWriteRdb(EofType eofType, String replId, long masterRdbOffset) throws IOException {
+				this.masterRdbOffset = masterRdbOffset;
+			}
+		});
+
+		chain.execute();
+		return psync;
 	}
 }

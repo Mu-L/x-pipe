@@ -21,9 +21,7 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnitRunner;
 
 import java.net.InetAddress;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
 import java.util.stream.IntStream;
 
 import static org.mockito.Matchers.anyString;
@@ -92,6 +90,34 @@ public class CRedisServiceHttpTest extends AbstractServiceTest {
     }
 
     @Test
+    public void testMarkInstanceDownWithActiveDc() throws Exception {
+        webServer.enqueue(new MockResponse().setBody("{\n" +
+                "    \"success\": true,\n" +
+                "    \"message\": \"success\"" +
+                "}")
+                .setHeader("Content-Type", "application/json"));
+
+        ClusterShardHostPort clusterShardHostPort = new ClusterShardHostPort("test-cluster", "shard1",
+                "jq", new HostPort("10.0.0.1", 6379));
+        credisService.markInstanceDown(clusterShardHostPort);
+
+        Assert.assertEquals(1, webServer.getRequestCount());
+
+        RecordedRequest request = webServer.takeRequest();
+        Assert.assertEquals("/keeperApi/switchReadStatus?clusterName=test-cluster&ip=10.0.0.1&port=6379&canRead=false&activeDc=jq",
+                request.getPath());
+        Assert.assertEquals("POST", request.getMethod());
+
+        MetricData metricData = metricProxy.poll();
+        Assert.assertNotNull(metricData);
+        Assert.assertEquals("call.credis", metricData.getMetricType());
+        Assert.assertEquals("markInstanceDown", metricData.getTags().get("api"));
+        Assert.assertEquals("test-cluster", metricData.getClusterName());
+        Assert.assertEquals("SUCCESS", metricData.getTags().get("status"));
+        Assert.assertNull(metricProxy.poll());
+    }
+
+    @Test
     public void testMigrationPreCheck() throws Exception {
         webServer.enqueue(new MockResponse().setBody("true").setHeader("Content-Type", "application/json"));
 
@@ -133,6 +159,84 @@ public class CRedisServiceHttpTest extends AbstractServiceTest {
         Assert.assertEquals("call.credis", metricData.getMetricType());
         Assert.assertEquals("excludeClusterDc", metricData.getTags().get("api"));
         Assert.assertEquals("test-cluster", metricData.getClusterName());
+        Assert.assertEquals("SUCCESS", metricData.getTags().get("status"));
+        Assert.assertNull(metricProxy.poll());
+    }
+
+    @Test
+    public void testgetAllExcludeIdcs() throws Exception {
+        webServer.enqueue(new MockResponse().setBody("{\"Success\":true,\"Result\":[" +
+                "{\"clusterName\":\"test_crdt_cluster\",\"excludedDcs\":[\"PTJQ\"]}" +
+                "]}")
+                .setHeader("Content-Type", "application/json"));
+
+        OuterClientService.OuterClientDataResp<List<OuterClientService.ClusterExcludedIdcInfo>> resp = credisService.getAllExcludedIdcs();
+        Assert.assertTrue(resp.isSuccess());
+
+        List<OuterClientService.ClusterExcludedIdcInfo> excludedIdcs = resp.getResult();
+        Assert.assertEquals(1, excludedIdcs.size());
+        Assert.assertEquals("test_crdt_cluster", excludedIdcs.get(0).getClusterName());
+        Assert.assertEquals(Collections.singletonList("PTJQ"), excludedIdcs.get(0).getExcludedDcs());
+        Assert.assertEquals(1, webServer.getRequestCount());
+
+        RecordedRequest request = webServer.takeRequest();
+        Assert.assertEquals(CREDIS_SERVICE.BATCH_EXCLUDE_IDCS.getPath(),
+                request.getPath());
+        Assert.assertEquals("GET", request.getMethod());
+
+        MetricData metricData = metricProxy.poll();
+        Assert.assertNotNull(metricData);
+        Assert.assertEquals("call.credis", metricData.getMetricType());
+        Assert.assertEquals("getAllExcludedIdcs", metricData.getTags().get("api"));
+        Assert.assertEquals("-", metricData.getClusterName());
+        Assert.assertEquals("SUCCESS", metricData.getTags().get("status"));
+        Assert.assertNull(metricProxy.poll());
+    }
+
+    @Test
+    public void testGetAllExcludeIdcsFail() throws Exception {
+        webServer.enqueue(new MockResponse().setBody("{\"Success\":false,\"Message\":\"test fail\"}")
+                .setHeader("Content-Type", "application/json"));
+
+        OuterClientService.OuterClientDataResp<List<OuterClientService.ClusterExcludedIdcInfo>> resp = credisService.getAllExcludedIdcs();
+        Assert.assertFalse(resp.isSuccess());
+
+        RecordedRequest request = webServer.takeRequest();
+        Assert.assertEquals(CREDIS_SERVICE.BATCH_EXCLUDE_IDCS.getPath(),
+                request.getPath());
+        Assert.assertEquals("GET", request.getMethod());
+
+        MetricData metricData = metricProxy.poll();
+        Assert.assertNotNull(metricData);
+        Assert.assertEquals("call.credis", metricData.getMetricType());
+        Assert.assertEquals("getAllExcludedIdcs", metricData.getTags().get("api"));
+        Assert.assertEquals("-", metricData.getClusterName());
+        Assert.assertEquals("SUCCESS", metricData.getTags().get("status"));
+        Assert.assertNull(metricProxy.poll());
+    }
+
+    @Test
+    public void testBatchExcludeIdcs() throws Exception {
+        webServer.enqueue(new MockResponse().setBody("{\"Message\":\"done\",\"Success\":true}")
+                .setHeader("Content-Type", "application/json"));
+
+        List<OuterClientService.ClusterExcludedIdcInfo> req = new ArrayList<>();
+        OuterClientService.ClusterExcludedIdcInfo info = new OuterClientService.ClusterExcludedIdcInfo();
+        info.setClusterName("test");
+        info.setExcludedDcs(Collections.singletonList("jq"));
+        req.add(info);
+
+        Assert.assertTrue(credisService.batchExcludeIdcs(req));
+        RecordedRequest request = webServer.takeRequest();
+        Assert.assertEquals(CREDIS_SERVICE.BATCH_EXCLUDE_IDCS.getPath(),
+                request.getPath());
+        Assert.assertEquals("POST", request.getMethod());
+
+        MetricData metricData = metricProxy.poll();
+        Assert.assertNotNull(metricData);
+        Assert.assertEquals("call.credis", metricData.getMetricType());
+        Assert.assertEquals("batchExcludeClusterDc", metricData.getTags().get("api"));
+        Assert.assertEquals("-", metricData.getClusterName());
         Assert.assertEquals("SUCCESS", metricData.getTags().get("status"));
         Assert.assertNull(metricProxy.poll());
     }
@@ -181,6 +285,66 @@ public class CRedisServiceHttpTest extends AbstractServiceTest {
 
         MetricData metricData = metricProxy.poll();
         Assert.assertEquals("getActiveDcClusters", metricData.getTags().get("api"));
+    }
+
+    @Test
+    public void testBatchGetInstances() throws Exception {
+        webServer.enqueue(new MockResponse().setBody("{\n" +
+                "    \"Success\": true,\n" +
+                "    \"Result\": [\n" +
+                "        {\n" +
+                "            \"ID\": 118991,\n" +
+                "            \"ParentID\": 0,\n" +
+                "            \"GroupID\": 1000079389,\n" +
+                "            \"PoolID\": 0,\n" +
+                "            \"IPAddress\": \"10.118.79.225\",\n" +
+                "            \"Port\": 21050,\n" +
+                "            \"Status\": 1,\n" +
+                "            \"CreateTime\": \"2021-06-07 16:56:27\",\n" +
+                "            \"UpdateTime\": \"2021-06-07 16:56:27\",\n" +
+                "            \"Remark\": null,\n" +
+                "            \"CanRead\": true,\n" +
+                "            \"Env\": \"PTOY\",\n" +
+                "            \"Token\": null\n" +
+                "        },\n" +
+                "        {\n" +
+                "            \"ID\": 118992,\n" +
+                "            \"ParentID\": 0,\n" +
+                "            \"GroupID\": 1000079389,\n" +
+                "            \"PoolID\": 0,\n" +
+                "            \"IPAddress\": \"10.118.79.225\",\n" +
+                "            \"Port\": 21051,\n" +
+                "            \"Status\": 1,\n" +
+                "            \"CreateTime\": \"2021-06-07 16:56:27\",\n" +
+                "            \"UpdateTime\": \"2021-06-07 16:56:27\",\n" +
+                "            \"Remark\": null,\n" +
+                "            \"CanRead\": false,\n" +
+                "            \"Env\": \"PTOY\",\n" +
+                "            \"Token\": null\n" +
+                "        }\n" +
+                "    ]\n" +
+                "}")
+                .setHeader("Content-Type", "application/json"));
+
+        Set<HostPort> instances = new HashSet<HostPort>() {{
+            add(new HostPort("10.118.79.225", 21050));
+            add(new HostPort("10.118.79.225", 21051));
+            add(new HostPort("10.118.79.225", 21052));
+        }};
+        Map<HostPort, Boolean> resp =credisService.batchQueryInstanceStatus("cluster1", instances);
+        Assert.assertEquals(new HashMap<HostPort, Boolean>(){{
+            put(new HostPort("10.118.79.225", 21050), true);
+            put(new HostPort("10.118.79.225", 21051), false);
+        }}, resp);
+
+        Assert.assertEquals(1, webServer.getRequestCount());
+        RecordedRequest req = webServer.takeRequest();
+        Assert.assertEquals("/keeperApi/queryReadStatus/batch", req.getPath());
+        Assert.assertEquals("POST", req.getMethod());
+
+        MetricData metricData = metricProxy.poll();
+        Assert.assertEquals("batchGetInstances", metricData.getTags().get("api"));
+        Assert.assertEquals("cluster1", metricData.getClusterName());
     }
 
     private OuterClientService.ClusterInfo mockClusterInfo(String clusterName, String activeDc, String backupDc, String redisIp) {

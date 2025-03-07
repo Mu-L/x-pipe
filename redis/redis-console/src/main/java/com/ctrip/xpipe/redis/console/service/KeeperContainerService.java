@@ -2,6 +2,7 @@ package com.ctrip.xpipe.redis.console.service;
 
 import com.ctrip.xpipe.redis.console.controller.api.data.meta.KeeperContainerCreateInfo;
 import com.ctrip.xpipe.redis.console.model.KeeperContainerInfoModel;
+import com.ctrip.xpipe.redis.console.model.KeeperMsgModel;
 import com.ctrip.xpipe.redis.console.model.KeepercontainerTbl;
 
 import java.util.List;
@@ -18,13 +19,14 @@ public interface KeeperContainerService {
 	List<KeepercontainerTbl> findAllActiveByDcName(String dcName);
 	List<KeepercontainerTbl> findKeeperCount(String dcName);
 	List<KeepercontainerTbl> findBestKeeperContainersByDcCluster(String dcName, String clusterName);
+	List<KeepercontainerTbl> findBestKeeperContainersByDcCluster(String dcName, String clusterName, boolean skipAzFilter);
 	List<KeepercontainerTbl> getKeeperContainerByAz(Long azId);
 
 	List<Set<Long>> divideKeeperContainers(int partsCount);
 
 	List<KeeperContainerInfoModel> findAllInfos();
 	KeeperContainerInfoModel findKeeperContainerInfoModelById(long id);
-	List<KeeperContainerInfoModel> findAvailableKeeperContainerInfoModelsByDcAzAndOrg(String dcName, String azName, String orgName);
+	List<KeeperContainerInfoModel> findAvailableKeeperContainerInfoModelsByDcAzOrgAndTag(String dcName, String azName, String orgName, String tag);
 
 	void addKeeperContainer(KeeperContainerCreateInfo createInfo);
 
@@ -39,4 +41,6 @@ public interface KeeperContainerService {
 	void updateKeeperContainerByInfoModel(KeeperContainerInfoModel keeperContainerInfoModel);
 
 	Map<Long, Long> keeperContainerIdDcMap();
+
+	List<KeeperMsgModel> getAllKeepers(String keeperIp);
 }

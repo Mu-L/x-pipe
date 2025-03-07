@@ -51,6 +51,8 @@ public interface CurrentMetaManager extends Observable {
 
 	String getCurrentMetaDesc();
 
+	List<KeeperMeta> getOneWaySurviveKeepers(Long clusterDbId, Long shardDbId);
+
 	/************* update support *****************/
 
 	void setRedises(Long clusterDbId, Long shardDbId, List<RedisMeta> redises);
@@ -74,6 +76,8 @@ public interface CurrentMetaManager extends Observable {
 	boolean watchApplierIfNotWatched(Long clusterDbId, Long shardDbId);
 
 	void setKeeperMaster(Long clusterDbId, Long shardDbId, String addr);
+
+	void setKeeperMaster(Long clusterDbId, Long shardDbId, String ip, int port, String expectedPrimaryDc);
 
 	void setKeeperMaster(Long clusterDbId, Long shardDbId, String ip, int port);
 

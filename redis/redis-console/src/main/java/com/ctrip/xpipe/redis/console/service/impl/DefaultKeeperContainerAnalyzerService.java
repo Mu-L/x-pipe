@@ -5,13 +5,9 @@ import com.ctrip.xpipe.monitor.CatEventMonitor;
 import com.ctrip.xpipe.redis.checker.model.KeeperContainerUsedInfoModel;
 import com.ctrip.xpipe.redis.console.config.ConsoleConfig;
 import com.ctrip.xpipe.redis.console.keeper.entity.KeeperContainerDiskType;
-import com.ctrip.xpipe.redis.console.model.KeeperContainerOverloadStandardModel;
-import com.ctrip.xpipe.redis.console.model.KeepercontainerTbl;
-import com.ctrip.xpipe.redis.console.model.OrganizationTbl;
-import com.ctrip.xpipe.redis.console.service.ConfigService;
-import com.ctrip.xpipe.redis.console.service.KeeperContainerService;
-import com.ctrip.xpipe.redis.console.service.KeeperContainerAnalyzerService;
-import com.ctrip.xpipe.redis.console.service.OrganizationService;
+import com.ctrip.xpipe.redis.console.model.*;
+import com.ctrip.xpipe.redis.console.service.*;
+import com.ctrip.xpipe.utils.StringUtil;
 import com.ctrip.xpipe.utils.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,8 +15,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
+import static com.ctrip.xpipe.redis.console.service.ConfigService.KEY_KEEPER_CONTAINER_IO_RATE;
 import static com.ctrip.xpipe.redis.console.service.ConfigService.KEY_KEEPER_CONTAINER_STANDARD;
 
 @Component
@@ -30,10 +28,16 @@ public class DefaultKeeperContainerAnalyzerService implements KeeperContainerAna
     private ConfigService configService;
 
     @Autowired
+    private ConsoleConfig consoleConfig;
+
+    @Autowired
     private KeeperContainerService keeperContainerService;
 
     @Autowired
     private OrganizationService organizationService;
+
+    @Autowired
+    private AzService azService;
 
     private static final long DEFAULT_PEER_DATA_OVERLOAD = 474L * 1024 * 1024 * 1024;
 
@@ -44,28 +48,36 @@ public class DefaultKeeperContainerAnalyzerService implements KeeperContainerAna
     private static final String KEEPER_STANDARD = "keeper_standard";
 
     @Override
-    public void initStandard(Map<String, KeeperContainerUsedInfoModel> currentDcAllKeeperContainerUsedInfoModelMap) {
-        Map<String, Long> standardMap = new HashMap<>();
-        for (KeeperContainerDiskType value : KeeperContainerDiskType.values()) {
-            try {
-                standardMap.put(value.getPeerData(), Long.parseLong(configService.getConfig(KEY_KEEPER_CONTAINER_STANDARD, value.getPeerData()).getVal()));
-                standardMap.put(value.getInputFlow(), Long.parseLong(configService.getConfig(KEY_KEEPER_CONTAINER_STANDARD, value.getInputFlow()).getVal()));
-            } catch (Exception e) {
-                logger.error("[analyzeKeeperContainerUsedInfo] get standardMap:{} error: {}", standardMap, e);
+    public void initStandard(List<KeeperContainerUsedInfoModel> currentDcAllKeeperContainerUsedInfoModelMap) {
+        Map<String, Long> inputFlowStandardMap = new HashMap<>();
+        Map<String, Long> peerDataStandardMap = new HashMap<>();
+        List<ConfigModel> configs = configService.getConfigs(KEY_KEEPER_CONTAINER_STANDARD);
+        if (configs != null && !configs.isEmpty()) {
+            for (ConfigModel config : configs) {
+                try {
+                    String[] split = config.getSubKey().split(KeeperContainerDiskType.DEFAULT.interval);
+                    if (split[1].equalsIgnoreCase(KeeperContainerDiskType.Standard.INPUT_FLOW.getDesc())) {
+                        inputFlowStandardMap.put(split[0], Long.parseLong(config.getVal()));
+                    } else if (split[1].equalsIgnoreCase(KeeperContainerDiskType.Standard.PEER_DATA.getDesc())) {
+                        peerDataStandardMap.put(split[0], Long.parseLong(config.getVal()));
+                    }
+                } catch (Exception e) {
+                    logger.error("[analyzeKeeperContainerUsedInfo] get inputFlowStandardMap:{} peerDataStandardMap:{} error: {}", inputFlowStandardMap, peerDataStandardMap, e);
+                }
             }
         }
-        CatEventMonitor.DEFAULT.logEvent(KEEPER_STANDARD, standardMap.toString());
-        KeeperContainerOverloadStandardModel defaultOverloadStandard = getDefaultStandard(standardMap);
-        for (KeeperContainerUsedInfoModel infoModel : currentDcAllKeeperContainerUsedInfoModelMap.values()) {
-            KeeperContainerOverloadStandardModel realKeeperContainerOverloadStandard = getRealStandard(standardMap, defaultOverloadStandard, infoModel);
+        CatEventMonitor.DEFAULT.logEvent(KEEPER_STANDARD, inputFlowStandardMap.toString() + inputFlowStandardMap.toString());
+        KeeperContainerOverloadStandardModel defaultOverloadStandard = getDefaultStandard(inputFlowStandardMap, peerDataStandardMap);
+        for (KeeperContainerUsedInfoModel infoModel : currentDcAllKeeperContainerUsedInfoModelMap) {
+            KeeperContainerOverloadStandardModel realKeeperContainerOverloadStandard = getRealStandard(inputFlowStandardMap, peerDataStandardMap, defaultOverloadStandard, infoModel);
             infoModel.setInputFlowStandard(realKeeperContainerOverloadStandard.getFlowOverload());
             infoModel.setRedisUsedMemoryStandard(realKeeperContainerOverloadStandard.getPeerDataOverload());
         }
     }
 
-    private KeeperContainerOverloadStandardModel getDefaultStandard(Map<String, Long> standardMap){
-        Long defaultPeerDataStandard = standardMap.get(KeeperContainerDiskType.DEFAULT.getPeerData());
-        Long defaultInputFlowStandard = standardMap.get(KeeperContainerDiskType.DEFAULT.getInputFlow());
+    private KeeperContainerOverloadStandardModel getDefaultStandard(Map<String, Long> inputFlowStandardMap, Map<String, Long> peerDataStandardMap){
+        Long defaultPeerDataStandard = peerDataStandardMap.get(KeeperContainerDiskType.DEFAULT.getDesc());
+        Long defaultInputFlowStandard = inputFlowStandardMap.get(KeeperContainerDiskType.DEFAULT.getDesc());
         KeeperContainerOverloadStandardModel defaultOverloadStandard;
         if (defaultInputFlowStandard != null && defaultPeerDataStandard != null) {
             defaultOverloadStandard = new KeeperContainerOverloadStandardModel(defaultPeerDataStandard, defaultInputFlowStandard);
@@ -76,26 +88,51 @@ public class DefaultKeeperContainerAnalyzerService implements KeeperContainerAna
         return defaultOverloadStandard;
     }
 
-    private KeeperContainerOverloadStandardModel getRealStandard( Map<String, Long> standardMap,
+    private KeeperContainerOverloadStandardModel getRealStandard( Map<String, Long> inputFlowStandardMap,
+                                                                  Map<String, Long> peerDataStandardMap,
                                                                  KeeperContainerOverloadStandardModel defaultOverloadStandard,
                                                                  KeeperContainerUsedInfoModel infoModel){
         KeepercontainerTbl keepercontainerTbl = keeperContainerService.find(infoModel.getKeeperIp());
         infoModel.setDiskType(keepercontainerTbl.getKeepercontainerDiskType());
         infoModel.setKeeperContainerActive(keepercontainerTbl.isKeepercontainerActive());
-        OrganizationTbl organizationTbl = organizationService.getOrganizationTblByCMSOrganiztionId(keepercontainerTbl.getOrgId());
+        infoModel.setExpectFullSyncTime(getExpectFullSyncTime(keepercontainerTbl.getKeepercontainerDiskType(), infoModel.getActiveRedisUsedMemory()));
+        AzTbl availableZoneTblById = azService.getAvailableZoneTblById(keepercontainerTbl.getAzId());
+        if (availableZoneTblById != null) {
+            infoModel.setAz(availableZoneTblById.getAzName());
+        }
+        OrganizationTbl organizationTbl = organizationService.getOrganization(keepercontainerTbl.getKeepercontainerOrgId());
         if (organizationTbl != null) {
             infoModel.setOrg(organizationTbl.getOrgName());
         }
-        for (KeeperContainerDiskType value : KeeperContainerDiskType.values()) {
-            if (value.getDesc().equalsIgnoreCase(infoModel.getDiskType())) {
-                Long peerDataStandard = standardMap.get(value.getPeerData());
-                Long inputFlowStandard = standardMap.get(value.getInputFlow());
-                if (peerDataStandard != null && inputFlowStandard != null) {
-                    return new KeeperContainerOverloadStandardModel(peerDataStandard, inputFlowStandard);
-                }
+        Long inputFlowStandard = null;
+        Long peerDataStandard = null;
+        for (Map.Entry<String, Long> entry : inputFlowStandardMap.entrySet()) {
+            if (entry.getKey().equalsIgnoreCase(infoModel.getDiskType())) {
+                inputFlowStandard = entry.getValue();
             }
         }
+        for (Map.Entry<String, Long> entry : peerDataStandardMap.entrySet()) {
+            if (entry.getKey().equalsIgnoreCase(infoModel.getDiskType())) {
+                peerDataStandard = entry.getValue();
+            }
+        }
+
+        if (peerDataStandard != null && inputFlowStandard != null) {
+            return new KeeperContainerOverloadStandardModel(peerDataStandard, inputFlowStandard);
+        }
         return defaultOverloadStandard;
+    }
+
+    private double getExpectFullSyncTime(String diskType, long activeRedisUsedMemory){
+        double ioRate;
+        if (StringUtil.isEmpty(diskType)) {
+            ioRate = consoleConfig.getKeeperContainerIoRate();
+        } else {
+            ConfigModel config = configService.getConfig(KEY_KEEPER_CONTAINER_IO_RATE, diskType.split(KeeperContainerDiskType.DEFAULT.interval)[0]);
+            ioRate = Double.parseDouble(config.getVal());
+        }
+        double result = (double) activeRedisUsedMemory /1024/1024/ioRate/60;
+        return Double.parseDouble(String.format("%.2f", result));
     }
 
     @VisibleForTesting
@@ -113,4 +150,13 @@ public class DefaultKeeperContainerAnalyzerService implements KeeperContainerAna
         this.organizationService = organizationService;
     }
 
+    @VisibleForTesting
+    public void setConsoleConfig(ConsoleConfig consoleConfig) {
+        this.consoleConfig = consoleConfig;
+    }
+
+    @VisibleForTesting
+    public void setAzService(AzService azService) {
+        this.azService = azService;
+    }
 }

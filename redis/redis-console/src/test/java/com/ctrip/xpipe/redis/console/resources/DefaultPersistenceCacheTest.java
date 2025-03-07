@@ -76,6 +76,7 @@ public class DefaultPersistenceCacheTest extends AbstractConsoleIntegrationTest 
         waitConditionUntilTimeOut(() -> persistenceCache.isSentinelAutoProcess(), 10, 1);
     }
 
+
     @Test
     public void testGetClusterCreateTime() {
         Date date = persistenceCache.getClusterCreateTime("Cluster1");

@@ -15,6 +15,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.Set;
 
 @Component
 @Profile(AbstractProfile.PROFILE_NAME_PRODUCTION)
@@ -22,6 +23,9 @@ public class DefaultMigrationProcessReporter extends AbstractSiteLeaderIntervalA
 
     @Autowired
     private ClusterService clusterService;
+
+    @Autowired
+    private MigrationReporterConfig migrationReporterConfig;
 
     @Autowired
     private DcService dcService;
@@ -40,16 +44,30 @@ public class DefaultMigrationProcessReporter extends AbstractSiteLeaderIntervalA
 
     private long totalClusters = 0;
 
+    private Set<String> lastBreakDownDc;
+
     @Override
     protected void doAction() {
         EventMonitor.DEFAULT.logEvent(REPORT_EVENT, "begin");
         MigrationProcessReportModel model = new MigrationProcessReportModel();
+        if (lastBreakDownDc == null) {
+            lastBreakDownDc = migrationReporterConfig.getBreakDownDc();
+        }
+        if (lastBreakDownDc != null && !lastBreakDownDc.equals(migrationReporterConfig.getBreakDownDc()) ) {
+            lastBreakDownDc = migrationReporterConfig.getBreakDownDc();
+            totalClusters = 0;
+        }
 
-        // TODO AzGroup need to be  considered after hetero cluster type online
-        Long nonMigrateClustersNum = clusterService.getCountByActiveDcAndClusterType(dcService.find(consoleConfig.getBreakDownDc()).getId(), ClusterType.ONE_WAY.name());
+        Long nonMigrateClustersNum = 0L;
+        for (String breakDownDc : migrationReporterConfig.getBreakDownDc()) {
+            nonMigrateClustersNum += clusterService.getCountByActiveDcAndClusterType(dcService.find(breakDownDc).getId(), ClusterType.ONE_WAY.name());
+            nonMigrateClustersNum += clusterService.getCountByActiveDcAndClusterType(dcService.find(breakDownDc).getId(), ClusterType.HETERO.name());
+        }
         if (totalClusters == 0 || nonMigrateClustersNum > totalClusters) {
             totalClusters = nonMigrateClustersNum;
         }
+
+        if (totalClusters == 0) return;
 
         model.setObjectCount((int)totalClusters).setProcess((int)((100 * (totalClusters - nonMigrateClustersNum) / totalClusters)));
 
@@ -57,7 +75,7 @@ public class DefaultMigrationProcessReporter extends AbstractSiteLeaderIntervalA
         logger.info("[DefaultMigrationReporter] send migration report model: {}，migration clusters:{}", model, totalClusters - nonMigrateClustersNum);
 
         ResponseEntity<NocReportResponseModel> responseEntity
-                = httpService.getRestTemplate().postForEntity(consoleConfig.getKeyMigrationProcessReportUrl(), model, NocReportResponseModel.class);
+                = httpService.getRestTemplate().postForEntity(migrationReporterConfig.getKeyMigrationProcessReportUrl(), model, NocReportResponseModel.class);
         if (responseEntity != null && responseEntity.getBody() != null &&  responseEntity.getBody().getCode() != 200) {
             logger.warn("[DefaultMigrationReporter] send migration report fail! migration model: {}, result:{}", model, responseEntity.getBody());
         }
@@ -65,14 +83,14 @@ public class DefaultMigrationProcessReporter extends AbstractSiteLeaderIntervalA
 
     @Override
     protected boolean shouldDoAction() {
-        logger.debug("[DefaultMigrationReporter]get switch {}", consoleConfig.isMigrationProcessReportOpen());
-        if (!consoleConfig.isMigrationProcessReportOpen()) totalClusters = 0;
-        return consoleConfig.isMigrationProcessReportOpen() && super.shouldDoAction();
+        logger.debug("[DefaultMigrationReporter]get switch {}", migrationReporterConfig.isMigrationProcessReportOpen());
+        if (!migrationReporterConfig.isMigrationProcessReportOpen()) totalClusters = 0;
+        return migrationReporterConfig.isMigrationProcessReportOpen() && super.shouldDoAction();
     }
 
     @Override
     protected long getIntervalMilli() {
-        return consoleConfig.getMigrationProcessReportIntervalMill();
+        return migrationReporterConfig.getMigrationProcessReportIntervalMill();
     }
 
     @Override
@@ -82,6 +100,6 @@ public class DefaultMigrationProcessReporter extends AbstractSiteLeaderIntervalA
 
     @Override
     protected long getLeastIntervalMilli() {
-        return consoleConfig.getMigrationProcessReportIntervalMill();
+        return migrationReporterConfig.getMigrationProcessReportIntervalMill();
     }
 }

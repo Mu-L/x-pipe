@@ -9,6 +9,7 @@ import com.ctrip.xpipe.redis.core.store.*;
 import com.ctrip.xpipe.redis.keeper.Gtid2OffsetIndexGenerator;
 import com.ctrip.xpipe.redis.keeper.config.KeeperConfig;
 import com.ctrip.xpipe.redis.keeper.monitor.KeeperMonitor;
+import com.ctrip.xpipe.redis.keeper.ratelimit.SyncRateManager;
 import com.ctrip.xpipe.redis.keeper.store.cmd.GtidSetCommandReaderWriterFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,16 +34,16 @@ public class GtidReplicationStore extends DefaultReplicationStore {
     protected final Object indexingLock = new Object();
 
     public GtidReplicationStore(File baseDir, KeeperConfig config, String keeperRunid,
-                                KeeperMonitor keeperMonitor, RedisOpParser redisOpParser) throws IOException {
+                                KeeperMonitor keeperMonitor, RedisOpParser redisOpParser, SyncRateManager syncRateManager) throws IOException {
         super(baseDir, config, keeperRunid,
                 new GtidSetCommandReaderWriterFactory(redisOpParser, config.getCommandIndexBytesInterval()),
-                keeperMonitor);
+                keeperMonitor, syncRateManager);
     }
 
     @Override
     protected CommandStore createCommandStore(File baseDir, ReplicationStoreMeta replMeta, int cmdFileSize,
                                               KeeperConfig config, CommandReaderWriterFactory cmdReaderWriterFactory,
-                                              KeeperMonitor keeperMonitor, RdbStore rdbStore) throws IOException {
+                                              KeeperMonitor keeperMonitor) throws IOException {
 
         String replRdbGtidSet = replMeta.getRdbGtidSet();
         logger.info("[createCommandStore], replRdbGtidSet={}", replRdbGtidSet);
@@ -51,6 +52,7 @@ public class GtidReplicationStore extends DefaultReplicationStore {
                 config.getReplicationStoreMinTimeMilliToGcAfterCreate(),
                 config::getReplicationStoreCommandFileNumToKeep,
                 config.getCommandReaderFlyingThreshold(), cmdReaderWriterFactory, keeperMonitor);
+        cmdStore.attachRateLimiter(syncRateManager.generatePsyncRateLimiter());
 
         try {
             cmdStore.initialize();
@@ -62,18 +64,10 @@ public class GtidReplicationStore extends DefaultReplicationStore {
     }
 
     @Override
-    protected RdbStore createRdbStore(File rdb, long rdbOffset, EofType eofType) throws IOException {
-        ReplicationStoreMeta meta = getMetaStore().dupReplicationStoreMeta();
-        if (meta.getRdbFile().equals(rdb.getName())) {
-            return new GtidRdbStore(rdb, rdbOffset, eofType, meta.getRdbGtidSet());
-        } else {
-            return new GtidRdbStore(rdb, rdbOffset, eofType, null);
-        }
-    }
-
-    @Override
-    protected RdbStoreListener createRdbStoreListener(RdbStore rdbStore) {
-        return new GtidReplicationStoreRdbFileListener(rdbStore);
+    protected RdbStore createRdbStore(File rdb, String replId, long rdbOffset, EofType eofType) throws IOException {
+        RdbStore rdbStore = new GtidRdbStore(rdb, replId, rdbOffset, eofType, null);
+        rdbStore.attachRateLimiter(syncRateManager.generateFsyncRateLimiter());
+        return rdbStore;
     }
 
     @Override
@@ -88,55 +82,35 @@ public class GtidReplicationStore extends DefaultReplicationStore {
     @Override
     public DumpedRdbStore prepareNewRdb() throws IOException {
         makeSureOpen();
-        return new DumpedGtidRdbStore(new File(getBaseDir(), newRdbFileName()));
+        DumpedRdbStore rdbStore = new DumpedGtidRdbStore(new File(getBaseDir(), newRdbFileName()));
+        rdbStore.attachRateLimiter(syncRateManager.generateFsyncRateLimiter());
+        return rdbStore;
     }
 
     @Override
-    public FULLSYNC_FAIL_CAUSE fullSyncIfPossible(FullSyncListener fullSyncListener) throws IOException {
+    public FULLSYNC_FAIL_CAUSE fullSyncIfPossible(FullSyncListener fullSyncListener, boolean tryRordb) throws IOException {
         makeSureOpen();
 
         if (!fullSyncListener.supportProgress(GtidSetReplicationProgress.class)) {
-            return super.fullSyncIfPossible(fullSyncListener);
+            return super.fullSyncIfPossible(fullSyncListener, tryRordb);
         }
 
-        FullSyncContext ctx = lockAndCheckIfFullSyncPossible();
-        if (ctx.isFullSyncPossible() && !ctx.getRdbStore().isGtidSetInit()) {
+        return doFullSyncIfPossible(fullSyncListener, tryRordb);
+    }
+
+    @Override
+    protected FULLSYNC_FAIL_CAUSE tryDoFullSync(FullSyncContext ctx, FullSyncListener fullSyncListener) throws IOException {
+        if (!ctx.getRdbStore().isGtidSetInit()) {
             ctx.getRdbStore().decrementRefCount();
-            return FULLSYNC_FAIL_CAUSE.RDB_GTIDSET_NOT_READY;
+            throw new IllegalStateException("unexpected rdb with gtid not init: " + ctx.getRdbStore());
         }
 
-        if (ctx.isFullSyncPossible()) {
-            return tryDoFullSync(ctx, fullSyncListener);
-        } else {
-            return ctx.getCause();
-        }
+        return super.tryDoFullSync(ctx, fullSyncListener);
     }
 
     @Override
     protected Logger getLogger() {
         return logger;
-    }
-
-    public class GtidReplicationStoreRdbFileListener extends ReplicationStoreRdbFileListener implements RdbStoreListener {
-
-        public GtidReplicationStoreRdbFileListener(RdbStore rdbStore) {
-            super(rdbStore);
-        }
-
-        @Override
-        public void onRdbGtidSet(String gtidSet) {
-            try {
-                getLogger().info("[onRdbGtidSet][update metastore] {} {}", rdbStore.getRdbFileName(), gtidSet);
-                getMetaStore().attachRdbGtidSet(rdbStore.getRdbFileName(), gtidSet);
-
-                getLogger().info("[onRdbGtidSet][update metastore] info to init first index {} - ({} - 1) = {} : {}",
-                        rdbStore.rdbOffset(), getMetaStore().beginOffset(), rdbStore.rdbOffset() - (getMetaStore().beginOffset() - 1), gtidSet);
-                cmdStore.setBaseIndex(gtidSet, rdbStore.rdbOffset() - (getMetaStore().beginOffset() - 1));
-            } catch (IOException e) {
-                getLogger().error("[onRdbGtidSet][update metastore]", e);
-            }
-        }
-
     }
 
     @Override
@@ -148,10 +122,10 @@ public class GtidReplicationStore extends DefaultReplicationStore {
                 return null;
             }
 
-            FullSyncContext ctx = lockAndCheckIfFullSyncPossible();
+            FullSyncContext ctx = lockAndCheckIfRdbFullSyncPossible();
             if (ctx.isFullSyncPossible() && !ctx.getRdbStore().isGtidSetInit()) {
                 ctx.getRdbStore().decrementRefCount();
-                return FULLSYNC_FAIL_CAUSE.RDB_GTIDSET_NOT_READY;
+                throw new IllegalStateException("unexpected rdb with gtid not init: " + ctx.getRdbStore());
             }
 
             if (ctx.isFullSyncPossible()) {

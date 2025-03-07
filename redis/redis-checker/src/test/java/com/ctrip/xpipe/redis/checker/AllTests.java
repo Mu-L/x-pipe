@@ -17,22 +17,15 @@ import com.ctrip.xpipe.redis.checker.healthcheck.actions.delay.CRDTDelayActionCo
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.delay.DelayActionTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.gtidgap.GtidGapCheckActionControllerTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.gtidgap.GtidGapCheckActionTest;
-import com.ctrip.xpipe.redis.checker.healthcheck.actions.interaction.CRDTDelayPingActionCollectorTest;
-import com.ctrip.xpipe.redis.checker.healthcheck.actions.interaction.HealthStatusTest;
-import com.ctrip.xpipe.redis.checker.healthcheck.actions.interaction.HeteroHealthStatusTest;
+import com.ctrip.xpipe.redis.checker.healthcheck.actions.interaction.*;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.interaction.compensator.InstanceHealthStatusCollectorTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.interaction.compensator.InstanceHealthStatusConsistenceInspectorTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.interaction.compensator.InstanceStatusAdjustCommandTest;
+import com.ctrip.xpipe.redis.checker.healthcheck.actions.interaction.handler.DefaultOuterClientAggregatorTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.interaction.handler.TestAbstractHealthEventHandlerTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.interaction.processor.OuterClientServiceProcessorTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.interaction.processor.route.DefaultRouteHealthEventProcessorTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.interaction.processor.route.HeteroRouteHealthEventProcessorTest;
-import com.ctrip.xpipe.redis.checker.healthcheck.actions.keeper.info.RedisInfoActionFactoryTest;
-import com.ctrip.xpipe.redis.checker.healthcheck.actions.keeper.info.RedisInfoActionTest;
-import com.ctrip.xpipe.redis.checker.healthcheck.actions.keeper.info.RedisUsedMemoryCollectorTest;
-import com.ctrip.xpipe.redis.checker.healthcheck.actions.keeper.infoStats.KeeperFlowCollectorTest;
-import com.ctrip.xpipe.redis.checker.healthcheck.actions.keeper.infoStats.KeeperInfoStatsActionFactoryTest;
-import com.ctrip.xpipe.redis.checker.healthcheck.actions.keeper.infoStats.KeeperInfoStatsActionTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.ping.PingActionContextTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.ping.PingActionTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.redisconf.RedisCheckRuleTest;
@@ -42,6 +35,7 @@ import com.ctrip.xpipe.redis.checker.healthcheck.actions.redisconf.RedisConfigCh
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.redisconf.diskless.DiskLessReplCheckActionTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.redisconf.version.VersionCheckActionFactoryTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.redisconf.version.VersionCheckActionTest;
+import com.ctrip.xpipe.redis.checker.healthcheck.actions.redisinfo.RedisMsgCollectorTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.redismaster.*;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.redisstats.crdtinforeplication.CrdtInfoReplicationActionFactoryTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.redisstats.crdtinforeplication.CrdtInfoReplicationActionTest;
@@ -78,17 +72,16 @@ import com.ctrip.xpipe.redis.checker.healthcheck.actions.sentinel.controller.Cro
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.sentinel.controller.CurrentDcSentinelHelloCheckControllerTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.sentinel.controller.OneWaySentinelHelloCheckControllerTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.allleader.DefaultSentinelMonitorsCheckTest;
-import com.ctrip.xpipe.redis.checker.healthcheck.allleader.sentinel.SentinelBindTaskTest;
-import com.ctrip.xpipe.redis.checker.healthcheck.clusteractions.beacon.BeaconActiveDcControllerTest;
-import com.ctrip.xpipe.redis.checker.healthcheck.clusteractions.beacon.BeaconMetaCheckActionTest;
+import com.ctrip.xpipe.redis.checker.healthcheck.clusteractions.beacon.BeaconConsistencyCheckActionTest;
+import com.ctrip.xpipe.redis.checker.healthcheck.clusteractions.beacon.DefaultBeaconMetaControllerTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.config.DefaultHealthCheckConfigTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.factory.DefaultHealthCheckEndpointFactoryTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.factory.DefaultHealthCheckInstanceFactoryTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.factory.HealthCheckEndpointFactoryTest;
+import com.ctrip.xpipe.redis.checker.healthcheck.impl.DefaultHealthCheckInstanceManagerTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.impl.DefaultHealthCheckerMockTest;
+import com.ctrip.xpipe.redis.checker.healthcheck.impl.DefaultRouteChooserTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.meta.DefaultDcMetaChangeManagerTest;
-import com.ctrip.xpipe.redis.checker.healthcheck.session.DefaultKeeperSessionManagerTest;
-import com.ctrip.xpipe.redis.checker.healthcheck.session.DefaultRedisSessionManagerTest;
 import com.ctrip.xpipe.redis.checker.healthcheck.stability.StabilityInspectorTest;
 import com.ctrip.xpipe.redis.checker.impl.*;
 import com.ctrip.xpipe.redis.checker.model.HealthCheckResultSerializeTest;
@@ -154,8 +147,8 @@ import org.junit.runners.Suite;
         CrossDcRedisMasterActionListenerTest.class,
         OutClientRedisMasterActionListenerTest.class,
 
-        BeaconMetaCheckActionTest.class,
-        BeaconActiveDcControllerTest.class,
+        BeaconConsistencyCheckActionTest.class,
+        DefaultBeaconMetaControllerTest.class,
 
         SentinelHelloTest.class,
         HealthStatusTest.class,
@@ -199,24 +192,21 @@ import org.junit.runners.Suite;
         AlertManagerTest.class,
 
         TestConnectProxyWithProxyClient.class,
-        SentinelBindTaskTest.class,
 
         GtidGapCheckActionTest.class,
         GtidGapCheckActionControllerTest.class,
 
-        KeeperFlowCollectorTest.class,
-        KeeperInfoStatsActionTest.class,
-        KeeperInfoStatsActionFactoryTest.class,
-        KeeperUsedInfoReporterTest.class,
+        DefaultHealthCheckConfigTest.class,
+        DefaultRouteChooserTest.class,
 
-        RedisInfoActionFactoryTest.class,
-        RedisInfoActionTest.class,
-        RedisUsedMemoryCollectorTest.class,
+        DefaultHealthCheckInstanceManagerTest.class,
 
-        DefaultKeeperSessionManagerTest.class,
-        DefaultRedisSessionManagerTest.class,
+        DefaultOuterClientAggregatorTest.class,
+        DefaultDelayPingActionCollectorTest.class,
+        DefaultAggregatorPullServiceTest.class,
+        RedisMsgCollectorTest.class,
+        RedisMsgReporterTest.class
 
-        DefaultHealthCheckConfigTest.class
 })
 public class AllTests {
 }

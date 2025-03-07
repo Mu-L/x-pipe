@@ -12,8 +12,11 @@ import com.ctrip.xpipe.redis.core.store.RdbFileListener;
 import com.ctrip.xpipe.redis.core.store.RdbStore;
 import com.ctrip.xpipe.redis.core.store.RdbStoreListener;
 import com.ctrip.xpipe.redis.core.store.OffsetReplicationProgress;
+import com.ctrip.xpipe.redis.core.store.ratelimit.ReplDelayConfig;
+import com.ctrip.xpipe.redis.core.store.ratelimit.SyncRateLimiter;
 import com.ctrip.xpipe.utils.DefaultControllableFile;
 import com.ctrip.xpipe.utils.SizeControllableFile;
+import com.google.common.util.concurrent.RateLimiter;
 import io.netty.buffer.ByteBuf;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,6 +27,7 @@ import java.io.RandomAccessFile;
 import java.nio.channels.FileChannel;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
@@ -44,6 +48,8 @@ public class DefaultRdbStore extends AbstractStore implements RdbStore {
 
 	private AtomicReference<Status> status = new AtomicReference<>(Status.Writing);
 
+	protected String replId;
+
 	protected long rdbOffset;
 
 	private AtomicInteger refCount = new AtomicInteger(0);
@@ -51,13 +57,19 @@ public class DefaultRdbStore extends AbstractStore implements RdbStore {
 	protected List<RdbStoreListener> rdbStoreListeners = new LinkedList<>();
 	
 	private Object truncateLock = new Object();
-	
-	public DefaultRdbStore(File file, long rdbOffset, EofType eofType) throws IOException {
 
+	private AtomicReference<Type> typeRef;
+
+	private AtomicReference<SyncRateLimiter> rateLimiterRef = new AtomicReference<>();
+	
+	public DefaultRdbStore(File file, String replId, long rdbOffset, EofType eofType) throws IOException {
+
+		this.replId = replId;
 		this.file = file;
 		this.eofType = eofType;
 		this.rdbOffset = rdbOffset;
-		
+		this.typeRef = new AtomicReference<>(Type.UNKNOWN);
+
 		if(file.length() > 0){
 			checkAndSetRdbState();
 		}else{
@@ -65,13 +77,50 @@ public class DefaultRdbStore extends AbstractStore implements RdbStore {
 			channel = writeFile.getChannel();
 		}
 	}
-	
+
+	@Override
+	public String getReplId() {
+		return replId;
+	}
+
+	@Override
+	public long getRdbOffset() {
+		return rdbOffset;
+	}
+
+	@Override
+	public EofType getEofType() {
+		return this.eofType;
+	}
+
+	@Override
+	public File getRdbFile() {
+		return file;
+	}
+
+	@Override
+	public void updateRdbType(Type type) {
+		this.typeRef.compareAndSet(Type.UNKNOWN, type);
+	}
+
+	@Override
+	public Type getRdbType() {
+		return typeRef.get();
+	}
+
+	@Override
+	public void attachRateLimiter(SyncRateLimiter rateLimiter) {
+		this.rateLimiterRef.set(rateLimiter);
+	}
+
 	@Override
 	public int writeRdb(ByteBuf byteBuf) throws IOException {
 		makeSureOpen();
 
-		int wrote = ByteBufUtils.writeByteBufToFileChannel(byteBuf, channel);
-		return wrote;
+		SyncRateLimiter rateLimiter = rateLimiterRef.get();
+		if (null != rateLimiter) rateLimiter.acquire(byteBuf.readableBytes());
+
+		return ByteBufUtils.writeByteBufToFileChannel(byteBuf, channel);
 	}
 
 	@Override
@@ -206,10 +255,16 @@ public class DefaultRdbStore extends AbstractStore implements RdbStore {
 	protected void doReadRdbFile(RdbFileListener rdbFileListener, ReferenceFileChannel referenceFileChannel) throws IOException {
 
 		long lastLogTime = System.currentTimeMillis();
+		RateLimiter rateLimiter = RateLimiter.create(Double.MAX_VALUE);
 		while (rdbFileListener.isOpen() && (isRdbWriting(status.get()) || (status.get() == Status.Success && referenceFileChannel.hasAnythingToRead()))) {
-			
-			ReferenceFileRegion referenceFileRegion = referenceFileChannel.readTilEnd();
+			int limitBytes = rdbFileListener.getLimitBytesPerSecond();
+			ReferenceFileRegion referenceFileRegion = referenceFileChannel.read(limitBytes);
 
+			if (limitBytes > 0 && referenceFileRegion.count() > 0) {
+				if (((int)rateLimiter.getRate()) != limitBytes) rateLimiter.setRate(limitBytes);
+				int readBytes = (int)Math.min(referenceFileRegion.count(), limitBytes);
+				rateLimiter.acquire(readBytes);
+			}
 			rdbFileListener.onFileData(referenceFileRegion);
 			if(referenceFileRegion.count() <= 0) {
 				try {
@@ -337,7 +392,8 @@ public class DefaultRdbStore extends AbstractStore implements RdbStore {
 
 	@Override
 	public String toString() {
-		return String.format("eofType:%s, rdbOffset:%d,file:%s, exists:%b, status:%s", eofType, rdbOffset, file, file.exists(), status.get());
+		return String.format("type:%s, eofType:%s, rdbOffset:%d,file:%s, exists:%b, status:%s",
+				typeRef.get().name(), eofType, rdbOffset, file, file.exists(), status.get());
 	}
 
 	@Override

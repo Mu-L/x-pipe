@@ -1,6 +1,8 @@
 package com.ctrip.xpipe.redis.console.service.impl;
 
 import com.ctrip.xpipe.cluster.ClusterType;
+import com.ctrip.xpipe.redis.checker.spring.ConsoleDisableDbCondition;
+import com.ctrip.xpipe.redis.checker.spring.DisableDbMode;
 import com.ctrip.xpipe.redis.console.config.ConsoleConfig;
 import com.ctrip.xpipe.redis.console.constant.XPipeConsoleConstant;
 import com.ctrip.xpipe.redis.console.dao.RedisDao;
@@ -18,6 +20,7 @@ import com.ctrip.xpipe.utils.ObjectUtils;
 import com.ctrip.xpipe.utils.StringUtil;
 import com.google.common.collect.Lists;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Service;
 import org.unidal.dal.jdbc.DalException;
 
@@ -27,6 +30,8 @@ import java.util.stream.Collectors;
 
 
 @Service
+@Conditional(ConsoleDisableDbCondition.class)
+@DisableDbMode(false)
 public class RedisServiceImpl extends AbstractConsoleService<RedisTblDao> implements RedisService {
 
     @Autowired
@@ -83,6 +88,16 @@ public class RedisServiceImpl extends AbstractConsoleService<RedisTblDao> implem
             @Override
             public List<RedisTbl> doQuery() throws DalException {
                 return dao.findByIp(ip, RedisTblEntity.READSET_IP_AND_PORT);
+            }
+        });
+    }
+
+    @Override
+    public List<RedisTbl> findAllRedisByIp(String ip) {
+        return queryHandler.handleQuery(new DalQuery<List<RedisTbl>>() {
+            @Override
+            public List<RedisTbl> doQuery() throws DalException {
+                return dao.findByIp(ip, RedisTblEntity.READSET_REDIS_MSG_INFO);
             }
         });
     }

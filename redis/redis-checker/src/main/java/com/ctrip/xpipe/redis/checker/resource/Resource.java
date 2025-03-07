@@ -8,7 +8,13 @@ public class Resource {
 
     public static final String REDIS_COMMAND_EXECUTOR = "redisCommandExecutor";
 
-    public static final String KEYED_NETTY_CLIENT_POOL = "keyedClientPool";
+    public static final String REDIS_KEYED_NETTY_CLIENT_POOL = "redisKeyedClientPool";
+
+    public static final String SENTINEL_KEYED_NETTY_CLIENT_POOL = "sentinelKeyedClientPool";
+
+    public static final String KEEPER_KEYED_NETTY_CLIENT_POOL = "keeperKeyedClientPool";
+
+    public static final String PROXY_KEYED_NETTY_CLIENT_POOL = "proxyKeyedClientPool";
 
     public static final String REDIS_SESSION_NETTY_CLIENT_POOL = "redisSessionClientPool";
 

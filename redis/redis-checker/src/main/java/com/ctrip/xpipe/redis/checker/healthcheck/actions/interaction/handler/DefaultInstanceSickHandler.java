@@ -37,27 +37,6 @@ public class DefaultInstanceSickHandler extends AbstractHealthEventHandler<Insta
     private ScheduledExecutorService scheduled;
 
     protected static final String currentDcId = FoundationService.DEFAULT.getDataCenter();
-    private static final List<HEALTH_STATE> satisfiedStates = Lists.newArrayList(HEALTH_STATE.DOWN, HEALTH_STATE.SICK, HEALTH_STATE.UNHEALTHY);
-
-    @Override
-    protected List<HEALTH_STATE> getSatisfiedStates() {
-        return satisfiedStates;
-    }
-
-    protected DcClusterDelayMarkDown getDelayMarkDownIfConfiged(AbstractInstanceEvent event) {
-        RedisInstanceInfo info = event.getInstance().getCheckInfo();
-        Set<DcClusterDelayMarkDown> dcClusters = checkerConfig.getDelayedMarkDownDcClusters();
-        if(dcClusters != null) {
-            for(DcClusterDelayMarkDown config : dcClusters) {
-                if(config.matches(info.getDcId(), info.getClusterId())) {
-                    logger.warn("[markdown] configured, markdown later in {} sec, {}", config.getDelaySecond(), info);
-                    alertManager.alert(info, ALERT_TYPE.INSTANCE_SICK_BUT_DELAY_MARK_DOWN, info.getDcId());
-                    return config;
-                }
-            }
-        }
-        return null;
-    }
 
     @Override
     protected void doHandle(InstanceSick instanceSick) {
@@ -82,17 +61,7 @@ public class DefaultInstanceSickHandler extends AbstractHealthEventHandler<Insta
 
     @Override
     protected void doMarkDown(final AbstractInstanceEvent event) {
-        DcClusterDelayMarkDown config = getDelayMarkDownIfConfiged(event);
-        if(config != null) {
-            scheduled.schedule(new AbstractExceptionLogTask() {
-                @Override
-                protected void doRun() {
-                    doRealMarkDown(event);
-                }
-            }, config.getDelaySecond(), TimeUnit.SECONDS);
-        } else {
-            doRealMarkDown(event);
-        }
+        doRealMarkDown(event);
     }
 
     @VisibleForTesting

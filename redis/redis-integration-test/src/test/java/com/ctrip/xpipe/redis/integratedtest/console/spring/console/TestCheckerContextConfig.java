@@ -11,12 +11,12 @@ import com.ctrip.xpipe.redis.checker.config.impl.DefaultCheckerDbConfig;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.interaction.HealthStateService;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.ping.DefaultPingService;
 import com.ctrip.xpipe.redis.checker.healthcheck.actions.ping.PingService;
-import com.ctrip.xpipe.redis.checker.healthcheck.allleader.SentinelMonitorsCheckCrossDc;
+import com.ctrip.xpipe.redis.checker.healthcheck.allleader.SentinelMonitorsCheck;
 import com.ctrip.xpipe.redis.checker.impl.*;
 import com.ctrip.xpipe.redis.checker.spring.ConsoleServerMode;
 import com.ctrip.xpipe.redis.checker.spring.ConsoleServerModeCondition;
 import com.ctrip.xpipe.redis.console.config.ConsoleConfig;
-import com.ctrip.xpipe.redis.console.config.impl.DefaultConsoleConfig;
+import com.ctrip.xpipe.redis.console.config.impl.DefaultCommonConfig;
 import com.ctrip.xpipe.redis.console.dao.MigrationClusterDao;
 import com.ctrip.xpipe.redis.console.dao.MigrationEventDao;
 import com.ctrip.xpipe.redis.console.dao.MigrationShardDao;
@@ -26,7 +26,6 @@ import com.ctrip.xpipe.redis.console.migration.auto.DefaultMonitorManager;
 import com.ctrip.xpipe.redis.console.migration.auto.MonitorManager;
 import com.ctrip.xpipe.redis.console.redis.DefaultSentinelManager;
 import com.ctrip.xpipe.redis.console.resources.CheckerAllMetaCache;
-import com.ctrip.xpipe.redis.console.resources.CheckerCurrentDcAllMeta;
 import com.ctrip.xpipe.redis.console.resources.CheckerMetaCache;
 import com.ctrip.xpipe.redis.console.resources.CheckerPersistenceCache;
 import com.ctrip.xpipe.redis.console.service.DcClusterShardService;
@@ -34,7 +33,7 @@ import com.ctrip.xpipe.redis.console.service.impl.DcClusterShardServiceImpl;
 import com.ctrip.xpipe.redis.console.service.meta.BeaconMetaService;
 import com.ctrip.xpipe.redis.console.service.meta.impl.BeaconMetaServiceImpl;
 import com.ctrip.xpipe.redis.console.util.DefaultMetaServerConsoleServiceManagerWrapper;
-import com.ctrip.xpipe.redis.core.meta.CurrentDcAllMeta;
+import com.ctrip.xpipe.redis.core.config.ConsoleCommonConfig;
 import com.ctrip.xpipe.redis.core.meta.MetaCache;
 import com.ctrip.xpipe.redis.integratedtest.console.config.SpringEnvConsoleConfig;
 import com.ctrip.xpipe.redis.integratedtest.console.config.TestFoundationService;
@@ -43,6 +42,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.*;
 
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 
 import static com.ctrip.xpipe.spring.AbstractSpringConfigContext.GLOBAL_EXECUTOR;
@@ -64,12 +64,6 @@ public class TestCheckerContextConfig {
 
     @Bean
     @Profile(AbstractProfile.PROFILE_NAME_PRODUCTION)
-    public CurrentDcAllMeta currentDcAllMeta() {
-        return new CheckerCurrentDcAllMeta();
-    }
-
-    @Bean
-    @Profile(AbstractProfile.PROFILE_NAME_PRODUCTION)
     public MetaCache metaCache(CheckerConfig checkerConfig, CheckerConsoleService checkerConsoleService) {
         return new CheckerMetaCache(checkerConfig, checkerConsoleService);
     }
@@ -86,19 +80,18 @@ public class TestCheckerContextConfig {
     }
 
     @Bean
-    @Profile(AbstractProfile.PROFILE_NAME_TEST)
-    public CurrentDcAllMeta testCurrentDcAllMeta() {
-        return new TestCurrentDcAllMetaCache();
-    }
-
-    @Bean
     public ProxyManager proxyManager(GroupCheckerLeaderElector clusterServer, CheckerConfig checkerConfig, CheckerConsoleService checkerConsoleService) {
         return new CheckerProxyManager(clusterServer, checkerConfig, checkerConsoleService);
     }
 
     @Bean
-    public DefaultConsoleConfig consoleConfig() {
-        return  new SpringEnvConsoleConfig();
+    public ConsoleCommonConfig consoleCommonConfig() {
+        return new DefaultCommonConfig();
+    }
+
+    @Bean
+    public ConsoleConfig consoleConfig() {
+        return new SpringEnvConsoleConfig();
     }
 
     @Bean
@@ -112,8 +105,8 @@ public class TestCheckerContextConfig {
     }
 
     @Bean
-    public MetaServerManager metaServerManager() {
-        return new DefaultMetaServerConsoleServiceManagerWrapper();
+    public MetaServerManager metaServerManager(ConsoleConfig config) {
+        return new DefaultMetaServerConsoleServiceManagerWrapper(config);
     }
 
     @Bean
@@ -143,18 +136,18 @@ public class TestCheckerContextConfig {
     }
 
     @Bean
-    public MonitorManager monitorServiceManager(MetaCache metaCache, ConsoleConfig config) {
-        return new DefaultMonitorManager(metaCache, config);
+    public MonitorManager monitorServiceManager(MetaCache metaCache, ConsoleConfig config, ConsoleCommonConfig consoleCommonConfig) {
+        return new DefaultMonitorManager(metaCache, config, consoleCommonConfig);
     }
 
     @Bean
-    public BeaconMetaService beaconMetaService(MetaCache metaCache, ConsoleConfig config) {
+    public BeaconMetaService beaconMetaService(MetaCache metaCache, ConsoleCommonConfig config) {
         return new BeaconMetaServiceImpl(metaCache, config);
     }
 
     @Bean
-    public BeaconManager beaconManager(MonitorManager monitorManager, BeaconMetaService beaconMetaService, CheckerConfig config) {
-        return new DefaultBeaconManager(monitorManager, beaconMetaService, config);
+    public BeaconManager beaconManager(MonitorManager monitorManager, BeaconMetaService beaconMetaService) {
+        return new DefaultBeaconManager(monitorManager, beaconMetaService);
     }
 
     @Bean
@@ -163,8 +156,8 @@ public class TestCheckerContextConfig {
     }
 
     @Bean
-    public RemoteCheckerManager remoteCheckerManager(CheckerConfig checkerConfig) {
-        return new DefaultRemoteCheckerManager(checkerConfig);
+    public RemoteCheckerManager remoteCheckerManager(CheckerConfig checkerConfig,GroupCheckerLeaderElector clusterServer, MetaCache metaCache) {
+        return new DefaultRemoteCheckerManager(checkerConfig, clusterServer, metaCache);
     }
 
     @Bean
@@ -178,9 +171,9 @@ public class TestCheckerContextConfig {
     public HealthCheckReporter healthCheckReporter(CheckerConfig checkerConfig, CheckerConsoleService checkerConsoleService,
                                                    GroupCheckerLeaderElector clusterServer, AllCheckerLeaderElector allCheckerLeaderElector, RedisDelayManager redisDelayManager,
                                                    CrossMasterDelayManager crossMasterDelayManager, PingService pingService,
-                                                   ClusterHealthManager clusterHealthManager, HealthStateService healthStateService,
+                                                   ClusterHealthManager clusterHealthManager, List<HealthStateService> healthStateServices,
                                                    @Value("${server.port}") int serverPort) {
-        return new HealthCheckReporter(healthStateService, checkerConfig, checkerConsoleService, clusterServer, allCheckerLeaderElector, redisDelayManager,
+        return new HealthCheckReporter(healthStateServices, checkerConfig, checkerConsoleService, clusterServer, allCheckerLeaderElector, redisDelayManager,
                 crossMasterDelayManager, pingService, clusterHealthManager, serverPort);
     }
 
@@ -196,12 +189,12 @@ public class TestCheckerContextConfig {
     }
 
     @Bean
-    public SentinelMonitorsCheckCrossDc sentinelMonitorsCheckCrossDc(CheckerAllMetaCache metaCache,PersistenceCache persistenceCache,
-                                                                     CheckerConfig config,
-                                                                     FoundationService foundationService,
-                                                                     SentinelManager manager,
-                                                                     AlertManager alertManager
+    public SentinelMonitorsCheck sentinelMonitorsCheckCrossDc(CheckerAllMetaCache metaCache, PersistenceCache persistenceCache,
+                                                              CheckerConfig config,
+                                                              FoundationService foundationService,
+                                                              SentinelManager manager,
+                                                              AlertManager alertManager
     ) {
-        return new SentinelMonitorsCheckCrossDc(metaCache, persistenceCache, config, foundationService.getDataCenter(), manager, alertManager);
+        return new SentinelMonitorsCheck(metaCache, persistenceCache, config, foundationService.getDataCenter(), manager, alertManager);
     }
 }

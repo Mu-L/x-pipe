@@ -1,8 +1,7 @@
 package com.ctrip.xpipe.redis.console.config.impl;
 
-import com.ctrip.xpipe.config.AbstractConfigBean;
 import com.ctrip.xpipe.redis.checker.alert.AlertDbConfig;
-import com.ctrip.xpipe.redis.checker.cache.TimeBoundCache;
+import com.ctrip.xpipe.cache.TimeBoundCache;
 import com.ctrip.xpipe.redis.console.config.ConsoleConfig;
 import com.ctrip.xpipe.redis.console.config.ConsoleDbConfig;
 import com.ctrip.xpipe.redis.console.model.ConfigModel;
@@ -19,14 +18,11 @@ import java.util.stream.Collectors;
  *         <p>
  *         Jun 15, 2017
  */
-public class DefaultConsoleDbConfig extends AbstractConfigBean implements ConsoleDbConfig, AlertDbConfig {
+public class DefaultConsoleDbConfig implements ConsoleDbConfig, AlertDbConfig {
 
     private TimeBoundCache<Set<String>> sentinelCheckWhitelistCache;
 
     private TimeBoundCache<Set<String>> clusterAlertWhitelistCache;
-
-    @Autowired
-    private DbConfig dbConfig;
 
     @Autowired
     private ConsoleConfig config;
@@ -36,8 +32,6 @@ public class DefaultConsoleDbConfig extends AbstractConfigBean implements Consol
 
     @PostConstruct
     public void postConstruct(){
-        setConfig(dbConfig);
-
         sentinelCheckWhitelistCache = new TimeBoundCache<>(config::getCacheRefreshInterval, this::refreshSentinelCheckWhiteList);
         clusterAlertWhitelistCache = new TimeBoundCache<>(config::getCacheRefreshInterval, this::refreshClusterAlertWhiteList);
     }

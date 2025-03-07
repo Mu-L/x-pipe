@@ -20,9 +20,13 @@ import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.unidal.tuple.Triple;
 
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
 /**
@@ -39,7 +43,7 @@ public abstract class AbstractMetaCache implements MetaCache {
 
     protected Pair<XpipeMeta, XpipeMetaManager> meta;
 
-    protected Map<String, Pair<String, String>> monitor2ClusterShard;
+    protected Map<String, Triple<String, String, Long>> monitor2ClusterShard;
 
     protected Set<HostPort> allKeepers;
 
@@ -69,6 +73,12 @@ public abstract class AbstractMetaCache implements MetaCache {
     }
 
     @Override
+    public XpipeMetaManager.MetaDesc findMetaDesc(HostPort hostPort) {
+        XpipeMetaManager xpipeMetaManager = meta.getValue();
+        return xpipeMetaManager.findMetaDesc(hostPort);
+    }
+
+    @Override
     public String getXmlFormatDividedXpipeMeta(int partIndex) {
         throw new UnsupportedOperationException();
     }
@@ -94,9 +104,13 @@ public abstract class AbstractMetaCache implements MetaCache {
         for(RedisCheckRuleMeta redisCheckRuleMeta : redisCheckRuleMetas) {
             xpipeMeta.addRedisCheckRule(redisCheckRuleMeta);
         }
-
+        xpipeMeta.setVersion(System.currentTimeMillis());
         return xpipeMeta;
+    }
 
+    @Override
+    public XpipeMeta getXpipeMetaLongPull(long version) throws InterruptedException {
+        return null;
     }
 
     void setActiveDcForCrossDcClusters(XpipeMeta xpipeMeta) {
@@ -295,12 +309,20 @@ public abstract class AbstractMetaCache implements MetaCache {
         return lastUpdateTime;
     }
 
+    @Override
+    public long getVersion() {
+        if(getXpipeMeta() != null) {
+            return getXpipeMeta().getVersion();
+        } else {
+            return 0l;
+        }
+    }
+
 
     @Override
-    public List<RouteMeta> getRoutes() {
+    public List<RouteMeta> getCurrentDcConsoleRoutes() {
         XpipeMetaManager xpipeMetaManager = meta.getValue();
-        return xpipeMetaManager
-                .consoleRoutes(CURRENT_IDC);
+        return xpipeMetaManager.consoleRoutes(CURRENT_IDC);
     }
 
     @Override
@@ -309,6 +331,12 @@ public abstract class AbstractMetaCache implements MetaCache {
         XpipeMetaManager xpipeMetaManager = meta.getValue();
         return !xpipeMetaManager.getDcZone(activeDc)
                 .equalsIgnoreCase(xpipeMetaManager.getDcZone(backupDc));
+    }
+
+    @Override
+    public boolean isDcInRegion(String dc, String zone) {
+        XpipeMetaManager xpipeMetaManager = meta.getValue();
+        return xpipeMetaManager.getDcZone(dc).equalsIgnoreCase(zone);
     }
 
     @Override
@@ -416,7 +444,7 @@ public abstract class AbstractMetaCache implements MetaCache {
 
         XpipeMetaManager xpipeMetaManager = meta.getValue();
 
-        String activeDc = xpipeMetaManager.getActiveDc(clusterId, shardId);
+        String activeDc = xpipeMetaManager.getActiveDc(clusterId);
         return xpipeMetaManager.getSentinelMonitorName(activeDc, clusterId, shardId);
     }
 
@@ -425,7 +453,7 @@ public abstract class AbstractMetaCache implements MetaCache {
 
         XpipeMetaManager xpipeMetaManager = meta.getValue();
 
-        String activeDc = xpipeMetaManager.getActiveDc(clusterId, shardId);
+        String activeDc = xpipeMetaManager.getActiveDc(clusterId);
         SentinelMeta sentinel = xpipeMetaManager.getSentinel(activeDc, clusterId, shardId);
 
         return new HashSet<>(IpUtils.parseAsHostPorts(sentinel.getAddress()));
@@ -448,6 +476,14 @@ public abstract class AbstractMetaCache implements MetaCache {
         ShardMeta shardMeta = xpipeMetaManager.doGetShardMeta(dc, cluster, shard);
         if (null == shardMeta) return Collections.emptyList();
         return shardMeta.getRedises();
+    }
+
+    @Override
+    public List<KeeperMeta> getKeeperOfDcClusterShard(String dc, String cluster, String shard) {
+        XpipeMetaManager xpipeMetaManager = meta.getValue();
+        ShardMeta shardMeta = xpipeMetaManager.doGetShardMeta(dc, cluster, shard);
+        if (null == shardMeta) return Collections.emptyList();
+        return shardMeta.getKeepers();
     }
 
     @Override
@@ -488,6 +524,11 @@ public abstract class AbstractMetaCache implements MetaCache {
     }
 
     @Override
+    public List<RedisMeta> getAllInstanceOfDc(String cluster, String dc) {
+        return meta.getValue().getRedises(dc, cluster);
+    }
+
+    @Override
     public String getDc(HostPort hostPort) {
 
         XpipeMetaManager xpipeMetaManager = meta.getValue();
@@ -515,12 +556,12 @@ public abstract class AbstractMetaCache implements MetaCache {
     }
 
     @Override
-    public Pair<String, String> findClusterShardBySentinelMonitor(String monitor) {
+    public Triple<String, String, Long> findClusterShardBySentinelMonitor(String monitor) {
         if(StringUtil.isEmpty(monitor)) {
             return null;
         }
 
-        Pair<String, String> clusterShard = monitor2ClusterShard.get(monitor);
+        Triple<String, String, Long> clusterShard = monitor2ClusterShard.get(monitor);
         if(clusterShard != null) {
             return clusterShard;
         }
@@ -546,7 +587,7 @@ public abstract class AbstractMetaCache implements MetaCache {
 
                     for (ShardMeta shardMeta : clusterMeta.getShards().values()) {
                         monitor2ClusterShard.put(shardMeta.getSentinelMonitorName(),
-                            new Pair<>(clusterMeta.getId(), shardMeta.getId()));
+                                new Triple(clusterMeta.getId(), shardMeta.getId(), shardMeta.getSentinelId()));
                     }
                 }
             }
@@ -557,9 +598,9 @@ public abstract class AbstractMetaCache implements MetaCache {
     }
 
     @Override
-    public String getActiveDc(String clusterId, String shardId){
+    public String getActiveDc(String clusterId){
         XpipeMetaManager xpipeMetaManager  =  meta.getValue();
-        return xpipeMetaManager.getActiveDc(clusterId, shardId);
+        return xpipeMetaManager.getActiveDc(clusterId);
     }
 
     @Override
@@ -648,6 +689,37 @@ public abstract class AbstractMetaCache implements MetaCache {
             throw new TooManyClustersRemovedException(String.format("dc:%s, current cluster count:%d,future cluster count:%d", currentDcMeta.getId(), currentClusterCount, futureClusterCount));
     }
 
+    @Override
+    public Set<String> getAllShardNamesByClusterName(String clusterName) {
+        Set<String> shards = new HashSet<>();
+        XpipeMeta xpipeMeta = meta.getKey();
+        for (DcMeta dcMeta : xpipeMeta.getDcs().values()) {
+            ClusterMeta clusterMeta = dcMeta.findCluster(clusterName);
+            if (clusterMeta != null) {
+               Map<String, ShardMeta> shardMetaMap = clusterMeta.getShards();
+               shards.addAll(shardMetaMap.keySet());
+            }
+        }
+        return shards;
+    }
+
+    @Override
+    public Map<String, Integer> getClusterCntMap(String clusterName) {
+        Map<String, Integer> clusterCntMap = new HashMap<>();
+        for (DcMeta dcMeta : meta.getKey().getDcs().values()) {
+            ClusterMeta clusterMeta = dcMeta.getClusters().get(clusterName);
+            if(clusterMeta == null) {
+                continue;
+            }
+            int cnt = 0;
+            for(ShardMeta shardMeta : clusterMeta.getShards().values()) {
+                cnt += shardMeta.getRedises().size();
+            }
+            clusterCntMap.put(dcMeta.getId(), cnt);
+        }
+        return clusterCntMap;
+    }
+
     @VisibleForTesting
     public AbstractMetaCache setMeta(Pair<XpipeMeta, XpipeMetaManager> meta) {
         this.meta = meta;
@@ -655,8 +727,9 @@ public abstract class AbstractMetaCache implements MetaCache {
     }
 
     @VisibleForTesting
-    public AbstractMetaCache setMonitor2ClusterShard(Map<String, Pair<String, String>> monitorMap) {
+    public AbstractMetaCache setMonitor2ClusterShard(Map<String, Triple<String, String, Long>> monitorMap) {
         this.monitor2ClusterShard = monitorMap;
         return this;
     }
+
 }

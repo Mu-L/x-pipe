@@ -85,7 +85,23 @@ public enum RedisOpSingleKeyEnum {
 
     // others
     PUBLISH(RedisOpType.PUBLISH, 1, 2),
-    MOVE(RedisOpType.MOVE, 1, null);
+    MOVE(RedisOpType.MOVE, 1, null),
+
+    //crdt
+    CRDT_SET(RedisOpType.CRDT_SET, 1, 2),
+    CRDT_RC(RedisOpType.CRDT_RC, 1, 2),
+    CRDT_HSET(RedisOpType.CRDT_HSET, 1, 2),
+    CRDT_REM_HASH(RedisOpType.CRDT_REM_HASH, 1, 2),
+    CRDT_SADD(RedisOpType.CRDT_SADD, 1, 2),
+    CRDT_SREM(RedisOpType.CRDT_SREM, 1, 2),
+    CRDT_ZADD(RedisOpType.CRDT_ZADD, 1, 2),
+    CRDT_ZREM(RedisOpType.CRDT_ZREM, 1, 2),
+    CRDT_ZINCRBY(RedisOpType.CRDT_ZINCRBY, 1, 2),
+    CRDT_COUNTER(RedisOpType.CRDT_COUNTER, 1, 2),
+    CRDT_PERSIST(RedisOpType.CRDT_PERSIST, 1, null),
+    CRDT_EXPIRE(RedisOpType.CRDT_EXPIRE, 1, 2),
+    CRDT_OVC(RedisOpType.CRDT_OVC, 1, 2),
+    CRDT_PUBLISH(RedisOpType.CRDT_PUBLISH, 1, 2);
 
     RedisOpSingleKeyEnum(RedisOpType redisOpType, Integer keyIndex, Integer valueIndex) {
         this.redisOpType = redisOpType;

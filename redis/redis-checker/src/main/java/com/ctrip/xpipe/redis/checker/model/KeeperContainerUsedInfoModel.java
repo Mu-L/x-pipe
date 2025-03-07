@@ -12,6 +12,12 @@ public class KeeperContainerUsedInfoModel {
 
     private String org;
 
+    private String tag;
+
+    private String az;
+
+    private String updateTime;
+
     private long activeInputFlow;
 
     private long totalInputFlow;
@@ -28,7 +34,7 @@ public class KeeperContainerUsedInfoModel {
 
     private int totalKeeperCount;
 
-    private Map<DcClusterShardActive, KeeperUsedInfo> detailInfo;
+    private Map<DcClusterShardKeeper, KeeperUsedInfo> detailInfo;
 
     private boolean keeperContainerActive;
 
@@ -37,6 +43,10 @@ public class KeeperContainerUsedInfoModel {
     private long diskSize;
 
     private long diskUsed;
+
+    private boolean keeperContainerHealth = true;
+
+    private double expectFullSyncTime;
 
     private String diskType = "default";
 
@@ -50,10 +60,12 @@ public class KeeperContainerUsedInfoModel {
         this.activeRedisUsedMemory = activeRedisUsedMemory;
     }
 
-    public KeeperContainerUsedInfoModel(KeeperContainerUsedInfoModel model, Map.Entry<DcClusterShardActive, KeeperUsedInfo> dcClusterShard) {
+    public KeeperContainerUsedInfoModel(KeeperContainerUsedInfoModel model, Map.Entry<DcClusterShardKeeper, KeeperUsedInfo> dcClusterShard) {
         this.keeperIp = model.getKeeperIp();
         this.dcName = model.getDcName();
         this.org = model.getOrg();
+        this.tag = model.getTag();
+        this.az = model.getAz();
         this.activeInputFlow = model.getActiveInputFlow() + dcClusterShard.getValue().getInputFlow();
         this.totalInputFlow = model.getTotalInputFlow() + dcClusterShard.getValue().getInputFlow();
         this.inputFlowStandard = model.getInputFlowStandard();
@@ -70,6 +82,43 @@ public class KeeperContainerUsedInfoModel {
         this.diskUsed = model.getDiskUsed();
         this.diskType = model.getDiskType();
     }
+
+    public static KeeperContainerUsedInfoModel cloneKeeperContainerUsedInfoModel(KeeperContainerUsedInfoModel model) {
+        KeeperContainerUsedInfoModel newModel = new KeeperContainerUsedInfoModel();
+        newModel.setKeeperIp(model.getKeeperIp());
+        newModel.setDcName(model.getDcName());
+        newModel.setOrg(model.getOrg());
+        newModel.setAz(model.getAz());
+        newModel.setUpdateTime(model.getUpdateTime());
+        newModel.setActiveInputFlow(model.getActiveInputFlow());
+        newModel.setTotalInputFlow(model.getTotalInputFlow());
+        newModel.setInputFlowStandard(model.getInputFlowStandard());
+        newModel.setActiveRedisUsedMemory(model.getActiveRedisUsedMemory());
+        newModel.setTotalRedisUsedMemory(model.getTotalRedisUsedMemory());
+        newModel.setRedisUsedMemoryStandard(model.getRedisUsedMemoryStandard());
+        newModel.setActiveKeeperCount(model.getActiveKeeperCount());
+        newModel.setTotalKeeperCount(model.getTotalKeeperCount());
+        if (model.getDetailInfo() != null) {
+            newModel.setDetailInfo(getKeeperUsedInfoMap(model));
+        }
+        newModel.setKeeperContainerActive(model.isKeeperContainerActive());
+        newModel.setDiskAvailable(model.isDiskAvailable());
+        newModel.setDiskSize(model.getDiskSize());
+        newModel.setDiskUsed(model.getDiskUsed());
+        newModel.setDiskType(model.getDiskType());
+        return newModel;
+    }
+
+    private static Map<DcClusterShardKeeper, KeeperUsedInfo> getKeeperUsedInfoMap(KeeperContainerUsedInfoModel model) {
+        Map<DcClusterShardKeeper, KeeperUsedInfo> clonedDetailInfo = new HashMap<>();
+        for (Map.Entry<DcClusterShardKeeper, KeeperUsedInfo> entry : model.getDetailInfo().entrySet()) {
+            DcClusterShardKeeper key = new DcClusterShardKeeper(entry.getKey().getDcId(), entry.getKey().getClusterId(), entry.getKey().getShardId(), entry.getKey().isActive(), entry.getKey().getPort());
+            KeeperUsedInfo value = new KeeperUsedInfo(entry.getValue().getPeerData(), entry.getValue().getInputFlow(), entry.getValue().keeperIP);
+            clonedDetailInfo.put(key, value);
+        }
+        return clonedDetailInfo;
+    }
+
 
     public String getDcName() {
         return dcName;
@@ -93,8 +142,36 @@ public class KeeperContainerUsedInfoModel {
         return org;
     }
 
-    public void setOrg(String org) {
+    public KeeperContainerUsedInfoModel setOrg(String org) {
         this.org = org;
+        return this;
+    }
+
+    public String getTag() {
+        return tag;
+    }
+
+    public KeeperContainerUsedInfoModel setTag(String tag) {
+        this.tag = tag;
+        return this;
+    }
+
+    public String getAz() {
+        return az;
+    }
+
+    public KeeperContainerUsedInfoModel setAz(String az) {
+        this.az = az;
+        return this;
+    }
+
+    public String getUpdateTime() {
+        return updateTime;
+    }
+
+    public KeeperContainerUsedInfoModel setUpdateTime(String updateTime) {
+        this.updateTime = updateTime;
+        return this;
     }
 
     public long getActiveInputFlow() {
@@ -134,11 +211,11 @@ public class KeeperContainerUsedInfoModel {
         return this;
     }
 
-    public Map<DcClusterShardActive, KeeperUsedInfo> getDetailInfo() {
+    public Map<DcClusterShardKeeper, KeeperUsedInfo> getDetailInfo() {
         return detailInfo;
     }
 
-    public KeeperContainerUsedInfoModel setDetailInfo(Map<DcClusterShardActive, KeeperUsedInfo> detailInfo) {
+    public KeeperContainerUsedInfoModel setDetailInfo(Map<DcClusterShardKeeper, KeeperUsedInfo> detailInfo) {
         this.detailInfo = detailInfo;
         return this;
     }
@@ -221,12 +298,33 @@ public class KeeperContainerUsedInfoModel {
         return this;
     }
 
+    public boolean isKeeperContainerHealth() {
+        return keeperContainerHealth;
+    }
+
+    public KeeperContainerUsedInfoModel setKeeperContainerHealth(boolean keeperContainerHealth) {
+        this.keeperContainerHealth = keeperContainerHealth;
+        return this;
+    }
+
+    public double getExpectFullSyncTime() {
+        return expectFullSyncTime;
+    }
+
+    public KeeperContainerUsedInfoModel setExpectFullSyncTime(double expectFullSyncTime) {
+        this.expectFullSyncTime = expectFullSyncTime;
+        return this;
+    }
+
     @Override
     public String toString() {
         return "KeeperContainerUsedInfoModel{" +
                 "keeperIp='" + keeperIp + '\'' +
                 ", dcName='" + dcName + '\'' +
                 ", org='" + org + '\'' +
+                ", tag='" + tag + '\'' +
+                ", az='" + az + '\'' +
+                ", updateTime='" + updateTime + '\'' +
                 ", activeInputFlow=" + activeInputFlow +
                 ", totalInputFlow=" + totalInputFlow +
                 ", inputFlowStandard=" + inputFlowStandard +
@@ -240,6 +338,8 @@ public class KeeperContainerUsedInfoModel {
                 ", diskAvailable=" + diskAvailable +
                 ", diskSize=" + diskSize +
                 ", diskUsed=" + diskUsed +
+                ", keeperContainerHealth=" + keeperContainerHealth +
+                ", expectFullSyncTime=" + expectFullSyncTime +
                 ", diskType='" + diskType + '\'' +
                 '}';
     }
@@ -324,7 +424,7 @@ public class KeeperContainerUsedInfoModel {
     @VisibleForTesting
     public KeeperContainerUsedInfoModel createKeeper(String clusterId, String shardId, boolean active, long inputFlow, long redisUsedMemory){
         if (this.detailInfo == null) this.detailInfo = new HashMap<>();
-        detailInfo.put(new DcClusterShardActive(this.dcName, clusterId, shardId, active), new KeeperUsedInfo(redisUsedMemory, inputFlow, this.keeperIp));
+        detailInfo.put(new DcClusterShardKeeper(this.dcName, clusterId, shardId, active), new KeeperUsedInfo(redisUsedMemory, inputFlow, this.keeperIp));
         this.setDetailInfo(detailInfo);
         return this;
     }

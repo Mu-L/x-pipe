@@ -12,6 +12,7 @@ import com.ctrip.xpipe.redis.console.query.DalQuery;
 import com.ctrip.xpipe.redis.console.service.*;
 import com.ctrip.xpipe.redis.core.util.SentinelUtil;
 import com.ctrip.xpipe.tuple.Pair;
+import com.ctrip.xpipe.utils.StringUtil;
 import com.ctrip.xpipe.utils.VisibleForTesting;
 import com.google.common.base.Strings;
 import com.google.common.collect.Sets;
@@ -26,6 +27,8 @@ import javax.annotation.PostConstruct;
 import java.util.*;
 import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
+
+import static com.ctrip.xpipe.redis.console.service.impl.ClusterServiceImpl.CLUSTER_DEFAULT_TAG;
 
 @Service
 public class SentinelGroupServiceImpl extends AbstractConsoleService<SentinelGroupTblDao> implements SentinelGroupService {
@@ -172,7 +175,11 @@ public class SentinelGroupServiceImpl extends AbstractConsoleService<SentinelGro
             if (sentinelGroupTbl == null)
                 throw new IllegalArgumentException(String.format("sentinel group with id:%s not exist", sentinelGroupModel.getSentinelGroupId()));
         } else {
-            SentinelGroupTbl insertTbl = new SentinelGroupTbl().setClusterType(sentinelGroupModel.getClusterType()).setSentinelDescription(sentinelGroupModel.getDesc());
+            SentinelGroupTbl insertTbl = new SentinelGroupTbl()
+                    .setClusterType(sentinelGroupModel.getClusterType())
+                    .setTag(sentinelGroupModel.getTag().trim().toUpperCase())
+                    .setSentinelDescription(sentinelGroupModel.getDesc())
+                    .setActive(sentinelGroupModel.getActive());
             queryHandler.handleQuery(new DalQuery<Integer>() {
                 @Override
                 public Integer doQuery() throws DalException {
@@ -260,6 +267,9 @@ public class SentinelGroupServiceImpl extends AbstractConsoleService<SentinelGro
                 for (String dc : dcs) {
                     result.putIfAbsent(dc, new SentinelUsageModel(dc));
                     result.get(dc).addSentinelUsage(sentinelGroupModel.getSentinelsAddressString(), sentinelGroupModel.getShardCount());
+                    if (!StringUtil.trimEquals(CLUSTER_DEFAULT_TAG, sentinelGroupModel.getTag(), true)) {
+                        result.get(dc).addSentinelTag(sentinelGroupModel.getTag(), sentinelGroupModel.getSentinelsAddressString(), sentinelGroupModel.getShardCount());
+                    }
                 }
             }
         });
@@ -372,6 +382,49 @@ public class SentinelGroupServiceImpl extends AbstractConsoleService<SentinelGro
         });
     }
 
+    @Override
+    public void updateActive(long id, int active) {
+        SentinelGroupTbl sentinelGroupTbl = queryHandler.handleQuery(new DalQuery<SentinelGroupTbl>() {
+            @Override
+            public SentinelGroupTbl doQuery() throws DalException {
+                return dao.findByPK(id, SentinelGroupTblEntity.READSET_FULL);
+            }
+        });
+        if (sentinelGroupTbl == null) {
+            throw new IllegalArgumentException(String.format("sentinel group with id:%s not exist", id));
+        }
+        sentinelGroupTbl.setActive(active);
+        queryHandler.handleUpdate(new DalQuery<Integer>() {
+            @Override
+            public Integer doQuery() throws DalException {
+                return dao.updateByPK(sentinelGroupTbl, SentinelGroupTblEntity.UPDATESET_FULL);
+            }
+        });
+    }
+
+    @Override
+    public SentinelGroupTbl updateTag(long id, String tag) {
+        SentinelGroupTbl sentinelGroupTbl = queryHandler.handleQuery(new DalQuery<SentinelGroupTbl>() {
+            @Override
+            public SentinelGroupTbl doQuery() throws DalException {
+                return dao.findByPK(id, SentinelGroupTblEntity.READSET_FULL);
+            }
+        });
+        if (sentinelGroupTbl == null) {
+            throw new IllegalArgumentException(String.format("sentinel group with id:%s not exist", id));
+        }
+        if (tag == null) {
+            throw new IllegalArgumentException("sentinel group tag can not be null!");
+        }
+        sentinelGroupTbl.setTag(tag.trim().toUpperCase());
+        queryHandler.handleUpdate(new DalQuery<Integer>() {
+            @Override
+            public Integer doQuery() throws DalException {
+                return dao.updateByPK(sentinelGroupTbl, SentinelGroupTblEntity.UPDATESET_FULL);
+            }
+        });
+        return sentinelGroupTbl;
+    }
 
     private static class RemoveShardSentinelMonitorEvent extends AbstractShardEvent {
 

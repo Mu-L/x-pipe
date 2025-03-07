@@ -8,9 +8,11 @@ import com.ctrip.xpipe.redis.console.controller.api.migrate.meta.DO_STATUS;
 import com.ctrip.xpipe.redis.console.migration.status.MigrationStatus;
 import com.ctrip.xpipe.redis.console.model.MigrationClusterTbl;
 import com.ctrip.xpipe.redis.console.model.OrganizationTbl;
-import com.ctrip.xpipe.redis.console.service.DcService;
 import com.ctrip.xpipe.redis.console.service.OrganizationService;
 import com.ctrip.xpipe.redis.console.service.migration.MigrationService;
+import com.ctrip.xpipe.redis.core.entity.DcMeta;
+import com.ctrip.xpipe.redis.core.entity.XpipeMeta;
+import com.ctrip.xpipe.redis.core.meta.MetaCache;
 import com.ctrip.xpipe.spring.AbstractProfile;
 import com.ctrip.xpipe.utils.DateTimeUtils;
 import com.google.common.collect.Lists;
@@ -21,6 +23,7 @@ import org.springframework.stereotype.Component;
 
 import javax.annotation.PostConstruct;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -31,9 +34,6 @@ public class DefaultMigrationResultReporter extends AbstractSiteLeaderIntervalAc
 
     @Autowired
     private MigrationService migrationService;
-
-    @Autowired
-    private DcService dcService;
 
     @Autowired
     private OrganizationService organizationService;
@@ -60,15 +60,41 @@ public class DefaultMigrationResultReporter extends AbstractSiteLeaderIntervalAc
 
     private DefaultHttpService httpService =  new DefaultHttpService();
 
+    @Autowired
+    private MigrationReporterConfig migrationReporterConfig;
+
+    @Autowired
+    private MetaCache metaCache;
+
+    private boolean isInited = false;
 
     @PostConstruct
     public void init() {
-        dcIdNameMap = dcService.dcNameMap();
+        dcIdNameMap = buildDcNameMap();
+        if(dcIdNameMap == null) {
+            isInited = false;
+            return;
+        }
         orgIdNameMap = organizationService.getAllOrganizations().stream().collect(Collectors.toMap(OrganizationTbl::getId, OrganizationTbl::getOrgName));
+        isInited = true;
+    }
+
+    private Map<Long, String> buildDcNameMap() {
+        XpipeMeta xpipeMeta = metaCache.getXpipeMeta();
+        if(xpipeMeta == null) {
+            return null;
+        }
+        Map<String, DcMeta> allDcs = xpipeMeta.getDcs();
+        Map<Long, String> result = new HashMap<>();
+        allDcs.values().forEach(dc -> result.put(dc.getDcId(), dc.getId()));
+        return result;
     }
 
     @Override
     protected void doAction() {
+        if(!isInited) {
+            init();
+        }
         EventMonitor.DEFAULT.logEvent(REPORT_EVENT, "begin");
         List<MigrationClusterTbl> latestMigrationClusters = migrationService.getLatestMigrationClusters(DEFAULT_STATISTICAL_INTERVAL);
         if (latestMigrationClusters == null || latestMigrationClusters.size() == 0) return;
@@ -91,11 +117,11 @@ public class DefaultMigrationResultReporter extends AbstractSiteLeaderIntervalAc
         });
 
         MigrationResultReportModel migrationResultReportModel = new MigrationResultReportModel().setRequest_body(migrationResult)
-                                                .setAccess_token(consoleConfig.getKeyMigrationResultReportToken());
+                                                .setAccess_token(migrationReporterConfig.getKeyMigrationResultReportToken());
 
         logger.debug("[DefaultMigrationResultReporter] report to noc {}", JsonCodec.DEFAULT.encode(migrationResultReportModel));
         ResponseEntity<NocReportResponseModel> response
-                = httpService.getRestTemplate().postForEntity(consoleConfig.getKeyMigrationResultReportUrl(), migrationResultReportModel, NocReportResponseModel.class);
+                = httpService.getRestTemplate().postForEntity(migrationReporterConfig.getKeyMigrationResultReportUrl(), migrationResultReportModel, NocReportResponseModel.class);
         if (response != null && response.getBody() != null && response.getBody().getCode() != 200) {
             logger.warn("[reportToNoc] send migration result fail! migration result: {}, result:{}", migrationResult, response.getBody());
         }
@@ -103,18 +129,18 @@ public class DefaultMigrationResultReporter extends AbstractSiteLeaderIntervalAc
 
     @Override
     protected boolean shouldDoAction() {
-        logger.debug("[DefaultMigrationResultReporter]get switch {}", consoleConfig.isMigrationResultReportOpen());
-        return consoleConfig.isMigrationResultReportOpen() && super.shouldDoAction();
+        logger.debug("[DefaultMigrationResultReporter]get switch {}", migrationReporterConfig.isMigrationResultReportOpen());
+        return migrationReporterConfig.isMigrationResultReportOpen() && super.shouldDoAction();
     }
 
     @Override
     protected long getIntervalMilli() {
-        return consoleConfig.getMigrationProcessReportIntervalMill();
+        return migrationReporterConfig.getMigrationProcessReportIntervalMill();
     }
 
     @Override
     protected long getLeastIntervalMilli() {
-        return consoleConfig.getMigrationProcessReportIntervalMill();
+        return migrationReporterConfig.getMigrationProcessReportIntervalMill();
     }
 
     @Override

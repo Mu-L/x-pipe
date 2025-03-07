@@ -12,6 +12,7 @@ import io.netty.buffer.PooledByteBufAllocator;
 import org.slf4j.Logger;
 
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -24,13 +25,13 @@ public abstract class AbstractRdbParser<T> implements RdbParser<T> {
 
     private LEN_READ_STATE lenReadState = LEN_READ_STATE.READ_INIT;
 
-    private RdbLenType lenType;
+    protected RdbLenType lenType;
 
-    private ByteBuf lenTemp;
+    protected ByteBuf lenTemp;
 
     private ByteBuf millSecondTemp;
 
-    private int lenNeedBytes = -1;
+    protected int lenNeedBytes = -1;
 
     private boolean skipParse = false;
 
@@ -52,7 +53,7 @@ public abstract class AbstractRdbParser<T> implements RdbParser<T> {
 
     protected RdbLength parseRdbLength(ByteBuf byteBuf) {
 
-        while(byteBuf.readableBytes() > 0) {
+        while (byteBuf.readableBytes() > 0) {
 
             switch (lenReadState) {
                 case READ_INIT:
@@ -65,8 +66,9 @@ public abstract class AbstractRdbParser<T> implements RdbParser<T> {
                 case READ_TYPE:
                     short lenTypeRaw = byteBuf.getUnsignedByte(byteBuf.readerIndex());
                     lenType = RdbLenType.parse(lenTypeRaw);
-                    if (null == lenType) throw new XpipeRuntimeException("unknown len type " + lenTypeRaw);
-
+                    if (null == lenType){
+                        throw new XpipeRuntimeException("unknown len type " + lenTypeRaw);
+                    }
                     if (lenType.needSkipLenTypeByte()) byteBuf.readerIndex(byteBuf.readerIndex() + 1);
                     lenReadState = LEN_READ_STATE.READ_VALUE;
                     break;
@@ -90,6 +92,8 @@ public abstract class AbstractRdbParser<T> implements RdbParser<T> {
         return null;
     }
 
+
+
     protected ByteBuf readUntilBytesEnough(ByteBuf src, ByteBuf dst, int needReadBytes) {
         if (null == dst && src.readableBytes() >= needReadBytes) {
             return src.readBytes(needReadBytes);
@@ -100,7 +104,7 @@ public abstract class AbstractRdbParser<T> implements RdbParser<T> {
         } else {
             int readCnt = Math.min(src.readableBytes(), needReadBytes - dst.readableBytes());
             if (dst instanceof CompositeByteBuf) {
-                ((CompositeByteBuf)dst).addComponent(true, src.readBytes(readCnt));
+                ((CompositeByteBuf) dst).addComponent(true, src.readBytes(readCnt));
                 return dst;
             } else {
                 CompositeByteBuf newByteBuf = PooledByteBufAllocator.DEFAULT.compositeDirectBuffer(needReadBytes);
@@ -131,7 +135,7 @@ public abstract class AbstractRdbParser<T> implements RdbParser<T> {
 
         byte[] expireAt = String.valueOf(expireTimeMilli).getBytes();
         notifyRedisOp(new RedisOpSingleKey(
-                RedisOpType.PEXPIREAT, new byte[][] {
+                RedisOpType.PEXPIREAT, new byte[][]{
                 RedisOpType.PEXPIREAT.name().getBytes(), redisKey.get(), expireAt},
                 redisKey, expireAt));
     }
@@ -147,16 +151,12 @@ public abstract class AbstractRdbParser<T> implements RdbParser<T> {
             }
             rawLong = (rawLong << 8) | unsignedByte;
         }
-
-        if (rawLong < 0) {
-            throw new UnsupportedOperationException("unsupport unsigned long in rdb len");
-        }
         return rawLong;
     }
 
     protected void notifyRedisOp(RedisOp redisOp) {
         getLogger().debug("[notifyRedisOp] {}", redisOp);
-        for (RdbParseListener listener: listeners) {
+        for (RdbParseListener listener : listeners) {
             try {
                 listener.onRedisOp(redisOp);
             } catch (Throwable th) {
@@ -167,7 +167,7 @@ public abstract class AbstractRdbParser<T> implements RdbParser<T> {
 
     protected void notifyAux(String key, String value) {
         getLogger().debug("[notifyAux] {} {}", key, value);
-        for (RdbParseListener listener: listeners) {
+        for (RdbParseListener listener : listeners) {
             try {
                 listener.onAux(key, value);
             } catch (Throwable th) {
@@ -176,12 +176,12 @@ public abstract class AbstractRdbParser<T> implements RdbParser<T> {
         }
     }
 
-    protected void notifyAuxEnd() {
+    protected void notifyAuxEnd(Map<String, String> axuMap) {
         getLogger().debug("[notifyAuxEnd]");
         for (RdbParseListener listener : listeners) {
             try {
-                listener.onAuxFinish();
-            } catch (Throwable t){
+                listener.onAuxFinish(axuMap);
+            } catch (Throwable t) {
                 getLogger().info("[notifyAuxEnd][fail][{}]", listener, t);
             }
         }
@@ -191,7 +191,7 @@ public abstract class AbstractRdbParser<T> implements RdbParser<T> {
         if (!needFinishNotify) return;
 
         getLogger().debug("[notifyFinish]");
-        for (RdbParseListener listener: listeners) {
+        for (RdbParseListener listener : listeners) {
             try {
                 listener.onFinish(this);
             } catch (Throwable th) {
@@ -230,7 +230,7 @@ public abstract class AbstractRdbParser<T> implements RdbParser<T> {
             lenTemp.release();
             lenTemp = null;
         }
-        if (millSecondTemp != null){
+        if (millSecondTemp != null) {
             millSecondTemp.release();
             millSecondTemp = null;
         }

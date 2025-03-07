@@ -6,10 +6,12 @@ import com.ctrip.xpipe.api.observer.Observable;
 import com.ctrip.xpipe.api.proxy.ProxyConnectProtocol;
 import com.ctrip.xpipe.concurrent.AbstractExceptionLogTask;
 import com.ctrip.xpipe.lifecycle.LifecycleHelper;
+import com.ctrip.xpipe.redis.core.exception.NoResourceException;
 import com.ctrip.xpipe.redis.proxy.Tunnel;
 import com.ctrip.xpipe.redis.proxy.config.ProxyConfig;
 import com.ctrip.xpipe.redis.proxy.monitor.TunnelMonitorManager;
 import com.ctrip.xpipe.redis.proxy.resource.ResourceManager;
+import com.ctrip.xpipe.redis.proxy.session.FrontendSession;
 import com.ctrip.xpipe.redis.proxy.tunnel.state.TunnelClosed;
 import com.ctrip.xpipe.utils.MapUtils;
 import com.ctrip.xpipe.utils.VisibleForTesting;
@@ -26,6 +28,7 @@ import org.springframework.stereotype.Component;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -116,23 +119,30 @@ public class DefaultTunnelManager implements TunnelManager {
                 return new DefaultTunnel(frontendChannel, protocol, config, proxyResourceManager, tunnelMonitorManager);
             }
         });
-        initAndStart(tunnel);
         tunnel.addObserver(this);
+        if (!initAndStart(tunnel)) {
+            try {
+                logger.info("[create][fail] release: {}", tunnel.identity());
+                tunnel.release();
+            } catch (Throwable th) {
+                logger.warn("[create][release fail]", th);
+            }
+        }
 
         return tunnel;
     }
 
-    private void initAndStart(Tunnel tunnel) {
+    private boolean initAndStart(Tunnel tunnel) {
         try {
             LifecycleHelper.initializeIfPossible(tunnel);
-        } catch (Exception e) {
-            logger.error("[initAndStart][init] ", e);
-        }
-        try {
             LifecycleHelper.startIfPossible(tunnel);
-        } catch (Exception e) {
-            logger.error("[initAndStart][start] ", e);
+            return true;
+        } catch (NoResourceException e){
+            logger.error("[initAndStart] {}", e.getMessage());
+        } catch (Throwable e) {
+            logger.error("[initAndStart]", e);
         }
+        return false;
     }
 
     @Override
@@ -143,6 +153,14 @@ public class DefaultTunnelManager implements TunnelManager {
             LifecycleHelper.disposeIfPossible(tunnel);
         } catch (Exception e) {
             logger.error("[remove] error dispose Tunnel: {}", tunnel.getTunnelMeta(), e);
+        }
+    }
+
+    @Override
+    public void removeAll() {
+        Set<Channel> toCloseChannels = new HashSet<>(cache.keySet());
+        for (Channel channel: toCloseChannels) {
+            remove(channel);
         }
     }
 
@@ -159,6 +177,16 @@ public class DefaultTunnelManager implements TunnelManager {
             }
         }
         return null;
+    }
+
+    @Override
+    public void markAllUnRead() {
+        for(Tunnel tunnel : tunnels()) {
+            FrontendSession frontendSession = tunnel.frontend();
+            if(frontendSession != null) {
+                frontendSession.markUnReadable();
+            }
+        }
     }
 
     @Override
@@ -191,7 +219,7 @@ public class DefaultTunnelManager implements TunnelManager {
         TunnelStateChangeEvent event = (TunnelStateChangeEvent) args;
 
         if(event.getCurrent() instanceof TunnelClosed) {
-            logger.info("[update] tunnel closed, remove from tunnel manager");
+            logger.info("[update][tunnel closed, remove from tunnel manager] {}", tunnel.identity());
             remove(tunnel.frontendChannel());
 
         }

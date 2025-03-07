@@ -19,12 +19,23 @@ angular
         },
         find_available_keepers_by_dc_az_and_org: {
             method: 'GET',
-            url: '/console/keepercontainers/dc/:dcName/az/:azName/org/:orgName',
+            url: '/console/keepercontainers',
+            params: {
+                dcName: '@dcName',
+                azName: '@azName',
+                orgName: '@orgName',
+                tag: '@tag'
+            },
             isArray : true
         },
         get_all_infos: {
             method: 'GET',
             url: '/console/keepercontainer/infos/all',
+            isArray : true
+        },
+        get_all_diskTypes: {
+            method: 'GET',
+            url: '/console/keepercontainer/diskType',
             isArray : true
         },
         get_all_organizations: {
@@ -40,10 +51,6 @@ angular
             method:'PUT',
             url:'/console/keepercontainer'
         },
-        keepercontainer_fullSynchronizationTime:{
-            method:'GET',
-            url:'/console/keepercontainer/max/fullSynchronizationTime'
-        },
         get_all_overload_keepercontainer: {
             method: 'GET',
             url: '/console/keepercontainers/overload/all',
@@ -54,18 +61,40 @@ angular
             url: '/console/keepercontainer/overload/info/lasted',
             isArray: true
         },
+        get_all_keepers: {
+            method: 'GET',
+            url: '/console/keepercontainer/keepers/:ip',
+            isArray: true
+        },
         get_overload_keepercontainer_migration_process: {
             method: 'GET',
             url: '/console/keepercontainer/overload/migration/process',
+            isArray: true
+        },
+        get_all_available_zone_info_models_by_dc: {
+            method: 'GET',
+            url: '/console/az/dcs/tbl/:dcId',
             isArray: true
         },
         begin_to_migrate_overload_keepercontainer:{
             method:'POST',
             url:'/console/keepercontainer/overload/migration/begin'
         },
+        migrate_keeper_task_terminate: {
+            method:'POST',
+            url:'/console/keepercontainer/overload/migration/terminate'
+        },
         stop_to_migrate_overload_keepercontainer:{
             method:'POST',
             url:'/console/keepercontainer/overload/migration/stop'
+        },
+        reset_election:{
+            method:'POST',
+            url:'/api/keepers/election/reset/:ip/:port/:shardId'
+        },
+        release_rdb:{
+            method:'POST',
+            url:'/api/keepers/release/rdb/:ip/:port/:shardId'
         }
     });
 
@@ -108,16 +137,30 @@ angular
         return d.promise;
     }
 
-    function findAvailableKeepersByDcAzAndOrg(dcName, azName, orgName) {
+    function findAvailableKeepersByDcAzOrgAndTag(dcName, azName, orgName, tag) {
         var d = $q.defer();
         resource.find_available_keepers_by_dc_az_and_org({
                             dcName: dcName,
                             azName: azName,
-                            orgName: orgName
+                            orgName: orgName,
+                            tag: tag
                         },
                         function (result) {
                             d.resolve(result);
                         }, function (result) {
+                d.reject(result);
+            });
+        return d.promise;
+    }
+
+    function getAllAvailableZoneInfoModelsByDc(dcId) {
+        var d = $q.defer();
+        resource.get_all_available_zone_info_models_by_dc({
+                dcId: dcId
+            },
+            function (result) {
+                d.resolve(result);
+            }, function (result) {
                 d.reject(result);
             });
         return d.promise;
@@ -159,14 +202,27 @@ angular
         return d.promise;
     }
 
-    function addKeepercontainer(addr, dcName, orgName, azName, active) {
+    function getAllDiskTypes() {
+        var d = $q.defer();
+        resource.get_all_diskTypes({},
+            function(result) {
+                d.resolve(result);
+            }, function(result) {
+                d.reject(result);
+            });
+        return d.promise;
+    }
+
+    function addKeepercontainer(addr, dcName, orgName, azName, active, diskType, tag) {
         var d = $q.defer();
         resource.add_keepercontainer({}, {
                     addr : addr,
                     dcName : dcName,
                     orgName : orgName,
                     azName : azName,
-                    active :active
+                    active :active,
+                    diskType : diskType,
+                    tag : tag,
                 },
                 function(result) {
                 d.resolve(result);
@@ -176,25 +232,16 @@ angular
         return d.promise;
     }
 
-    function getKeepercontainerFullSynchronizationTime() {
-        var d = $q.defer();
-        resource.keepercontainer_fullSynchronizationTime({},
-            function(result) {
-                d.resolve(result);
-            }, function(result) {
-                d.reject(result);
-            });
-        return d.promise;
-    }
-
-    function updateKeepercontainer(addr, dcName, orgName, azName, active) {
+    function updateKeepercontainer(addr, dcName, orgName, azName, active, diskType, tag) {
         var d = $q.defer();
         resource.update_keepercontainer({}, {
                     addr : addr,
                     dcName : dcName,
                     orgName : orgName,
                     azName : azName,
-                    active :active
+                    active :active,
+                    diskType : diskType,
+                    tag : tag
                 },
                 function(result) {
                 d.resolve(result);
@@ -226,6 +273,19 @@ angular
         return d.promise;
     }
 
+    function getAllKeepers(ip) {
+        var d = $q.defer();
+        resource.get_all_keepers({
+                ip:ip
+            },
+            function (result) {
+                d.resolve(result);
+            }, function (result) {
+                d.reject(result);
+            });
+        return d.promise;
+    }
+
     function getOverloadKeeperContainerMigrationProcess() {
         var d = $q.defer();
         resource.get_overload_keepercontainer_migration_process({},
@@ -249,19 +309,65 @@ angular
         return d.promise;
     }
 
+    function migrateKeeperTaskTerminate() {
+        var d = $q.defer();
+        resource.migrate_keeper_task_terminate({},
+            function (result) {
+                d.resolve(result);
+            }, function (result) {
+                d.reject(result);
+            });
+        return d.promise;
+    }
+
+    function resetElection(ip, port, shardId) {
+        var d = $q.defer();
+        resource.reset_election({
+                ip:ip,
+                port:port,
+                shardId:shardId
+            },
+            function (result) {
+                d.resolve(result);
+            }, function (result) {
+                d.reject(result);
+            });
+        return d.promise;
+    }
+
+    function releaseRdb(ip, port, shardId) {
+        var d = $q.defer();
+        resource.release_rdb({
+                ip:ip,
+                port:port,
+                shardId:shardId
+            },
+            function (result) {
+                d.resolve(result);
+            }, function (result) {
+                d.reject(result);
+            });
+        return d.promise;
+    }
+
     return {
         findAvailableKeepersByDc : findAvailableKeepersByDc,
         findAvailableKeepersByDcAndCluster : findAvailableKeepersByDcAndCluster,
         findKeepercontainerById : findKeepercontainerById,
-        findAvailableKeepersByDcAzAndOrg : findAvailableKeepersByDcAzAndOrg,
+        getAllAvailableZoneInfoModelsByDc : getAllAvailableZoneInfoModelsByDc,
+        findAvailableKeepersByDcAzOrgAndTag : findAvailableKeepersByDcAzOrgAndTag,
         getAllInfos: getAllInfos,
         getAllOrganizations: getAllOrganizations,
+        getAllDiskTypes: getAllDiskTypes,
         addKeepercontainer: addKeepercontainer,
         updateKeepercontainer: updateKeepercontainer,
         getAllOverloadKeepercontainer : getAllOverloadKeepercontainer,
         getAllKeepercontainerUsedInfo : getAllKeepercontainerUsedInfo,
+        getAllKeepers:getAllKeepers,
         getOverloadKeeperContainerMigrationProcess : getOverloadKeeperContainerMigrationProcess,
         beginToMigrateOverloadKeeperContainers : beginToMigrateOverloadKeeperContainers,
-        getKeepercontainerFullSynchronizationTime : getKeepercontainerFullSynchronizationTime
+        migrateKeeperTaskTerminate : migrateKeeperTaskTerminate,
+        resetElection: resetElection,
+        releaseRdb: releaseRdb
     }
 }]);

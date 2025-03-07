@@ -161,11 +161,6 @@ public class TestConfig implements CheckerConfig, AlertConfig {
     }
 
     @Override
-    public Set<DcClusterDelayMarkDown> getDelayedMarkDownDcClusters() {
-        return new HashSet<>();
-    }
-
-    @Override
     public int getStableLossAfterRounds() {
         return 2;
     }
@@ -231,11 +226,6 @@ public class TestConfig implements CheckerConfig, AlertConfig {
     }
 
     @Override
-    public Set<String> getAllCheckerAddress() {
-        return Collections.singleton("127.0.0.1:8080");
-    }
-
-    @Override
     public long getConfigCacheTimeoutMilli() {
         return 0L;
     }
@@ -274,16 +264,6 @@ public class TestConfig implements CheckerConfig, AlertConfig {
     public int getNonCoreCheckIntervalMilli() {
         return 3 * 60 * 60 *1000;
     }
-  
-    @Override
-    public boolean shouldBindOuterClusterShardAndSentinel() {
-        return false;
-    }
-
-    @Override
-    public int sentinelBindTimeoutMilli() {
-        return 0;
-    }
 
     @Override
     public Set<String> getOuterClusterTypes() {
@@ -321,13 +301,23 @@ public class TestConfig implements CheckerConfig, AlertConfig {
     }
 
     @Override
-    public Set<String> getMigrationUnsupportedClusters() {
-        return new HashSet<>();
+    public int getKeeperCheckerIntervalMilli() {
+        return 1000;
     }
 
     @Override
-    public int getKeeperCheckerIntervalMilli() {
+    public int getMarkInstanceBaseDelayMilli() {
         return 1000;
+    }
+
+    @Override
+    public int getMarkInstanceMaxDelayMilli() {
+        return 2000;
+    }
+
+    @Override
+    public boolean getShouldDoAfterNettyClientConnected() {
+        return true;
     }
 
 }

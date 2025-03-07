@@ -144,6 +144,8 @@ public class DefaultProxyServer implements ProxyServer {
         if(tlsFuture != null) {
             tlsFuture.channel().close();
         }
+        tunnelManager.markAllUnRead();
+        tunnelManager.removeAll();
     }
 
 
